@@ -1,0 +1,25 @@
+{
+  "name": "surv",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "agent:audit": "node scripts/agent-audit.mjs",
+    "dev": "vite --host 0.0.0.0",
+    "build": "tsc && vite build",
+    "test": "vitest run tests/unit",
+    "preview": "vite preview --host 0.0.0.0",
+    "test:smoke": "playwright test",
+    "build:yandex": "npm run build && python scripts/make-yandex-zip.py",
+    "validate:yandex": "npm run build && python scripts/validate-yandex-build.py"
+  },
+  "dependencies": {
+    "phaser": "^3.90.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.3",
+    "vite": "^6.3.5",
+    "vitest": "^4.1.7",
+    "@playwright/test": "^1.52.0"
+  }
+}
