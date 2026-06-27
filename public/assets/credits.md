@@ -3,6 +3,7 @@
 | Asset | Source | License / ownership | Notes |
 | --- | --- | --- | --- |
 | `images/backgrounds/road-bunker.webp` | Optimized from `art/image.png` | Project-provided asset | Battle background WebP, added 2026-06-11 |
+| `images/structures/bunker.png` | Generated with OpenAI image generation | Project-generated asset | Top-down bunker sprite with three weapon mounts, generated 2026-06-24 |
 | `images/weapons/pistol.png` | Generated with PixelLab MCP | Project-generated asset | Inventory-grid pistol, generated 2026-06-02 |
 | `images/weapons/shotgun.png` | Generated with PixelLab MCP | Project-generated asset | Inventory-grid shotgun, regenerated horizontal 2026-06-11 |
 | `images/weapons/tesla.png` | Generated with PixelLab MCP | Project-generated asset | Inventory-grid tesla cannon, generated 2026-06-02 |

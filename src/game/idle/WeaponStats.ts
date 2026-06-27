@@ -11,7 +11,12 @@ export type WeaponProgress = {
 export type WeaponComputedStats = {
   damage: number;
   cooldownMs: number;
+  magazineSize: number;
+  reloadMs: number;
   projectileSpeed: number;
+  rangePx: number;
+  critChance: number;
+  critMultiplier: number;
   spread: number;
 };
 
@@ -19,6 +24,8 @@ export const EMPTY_WEAPON_STAT_LEVELS: WeaponStatLevels = {
   damage: 0,
   fireRate: 0,
   handling: 0,
+  range: 0,
+  critChance: 0,
   special: 0,
 };
 
@@ -50,12 +57,18 @@ export function getWeaponComputedStats(weaponId: WeaponId, progress: WeaponProgr
   const damageMultiplier = 1 + progress.stats.damage * 0.16;
   const cooldownMultiplier = Math.max(0.52, 1 - progress.stats.fireRate * 0.055);
   const speedMultiplier = 1 + progress.stats.handling * 0.075;
+  const critChance = Math.min(0.3, progress.stats.critChance * 0.03);
   const bonusSpread = getSpecialSpreadBonus(weaponId, progress.stats.special);
 
   return {
     damage: Math.ceil(weapon.damage * damageMultiplier),
     cooldownMs: Math.max(240, Math.round(weapon.cooldownMs * 2 * cooldownMultiplier)),
+    magazineSize: weapon.magazineSize,
+    reloadMs: weapon.reloadMs,
     projectileSpeed: Math.round(weapon.projectileSpeed * speedMultiplier),
+    rangePx: getWeaponRange(weaponId, progress),
+    critChance,
+    critMultiplier: 1.5,
     spread: weapon.spread + bonusSpread,
   };
 }
@@ -66,7 +79,9 @@ export function getWeaponDamage(weaponId: WeaponId, progress: WeaponProgress = c
 
 export function getWeaponDps(weaponId: WeaponId, progress: WeaponProgress = createWeaponProgress(true)): number {
   const stats = getWeaponComputedStats(weaponId, progress);
-  const shotsPerSecond = 1000 / stats.cooldownMs;
+  const magazineSize = Math.max(1, stats.magazineSize);
+  const cycleMs = stats.cooldownMs * magazineSize + stats.reloadMs;
+  const shotsPerSecond = (magazineSize * 1000) / cycleMs;
   return stats.damage * stats.spread * shotsPerSecond;
 }
 
@@ -86,4 +101,15 @@ function getSpecialSpreadBonus(weaponId: WeaponId, specialLevel: number): number
   }
 
   return 0;
+}
+
+function getWeaponRange(weaponId: WeaponId, progress: WeaponProgress): number {
+  const weapon = WEAPONS[weaponId];
+  const rangeStat = weapon.upgradeStats.find((stat) => stat.id === 'range');
+  const maxLevel = rangeStat?.maxLevel ?? 0;
+  if (maxLevel <= 0) return weapon.rangePx;
+
+  const rangeLevel = Math.min(progress.stats.range, maxLevel);
+  const t = rangeLevel / maxLevel;
+  return Math.round(weapon.rangePx + (weapon.maxRangePx - weapon.rangePx) * t);
 }

@@ -5,6 +5,9 @@ export const AssetKeys = {
   Backgrounds: {
     battlefield: 'background-battlefield',
   },
+  Structures: {
+    bunker: 'structure-bunker',
+  },
   Currency: {
     caps: 'currency-caps',
     tokens: 'currency-tokens',
@@ -22,6 +25,20 @@ export const AssetKeys = {
   Enemies: {
     zombieSouth: 'enemy-zombie-south',
     mutant: 'enemy-mutant',
+  },
+  Audio: {
+    Weapons: {
+      pistolShot: 'audio-weapon-pistol-shot',
+      shotgunShot: 'audio-weapon-shotgun-shot',
+      compactShotgunShot: 'audio-weapon-compact-shotgun-shot',
+      assaultRifleShot: 'audio-weapon-assault-rifle-shot',
+      sniperRifleShot: 'audio-weapon-sniper-rifle-shot',
+      grenadeLauncherShot: 'audio-weapon-grenade-launcher-shot',
+      teslaShot: 'audio-weapon-tesla-shot',
+    },
+    Effects: {
+      grenadeExplosion: 'audio-effect-grenade-explosion',
+    },
   },
 } as const;
 
@@ -113,8 +130,14 @@ export type SpritesheetAsset = {
   spacing?: number;
 };
 
+export type AudioAsset = {
+  key: string;
+  urls: string[];
+};
+
 export const imageAssets: ImageAsset[] = [
   { key: AssetKeys.Backgrounds.battlefield, url: 'assets/images/backgrounds/phone-1.png?v=20260615a' },
+  { key: AssetKeys.Structures.bunker, url: 'assets/images/structures/bunker.png?v=20260624a' },
   { key: AssetKeys.Currency.caps, url: 'assets/images/ui/currency-caps.png?v=20260618c' },
   { key: AssetKeys.Currency.tokens, url: 'assets/images/ui/currency-tokens.png?v=20260618d' },
   { key: AssetKeys.Weapons.pistol, url: 'assets/images/weapons/pistol.png' },
@@ -139,6 +162,16 @@ export const imageAssets: ImageAsset[] = [
   ...createEnemyFrameAssets('zombie-mutant'),
 ];
 export const spritesheetAssets: SpritesheetAsset[] = [];
+export const audioAssets: AudioAsset[] = [
+  { key: AssetKeys.Audio.Weapons.pistolShot, urls: ['assets/audio/weapon-pistol-shot.mp3'] },
+  { key: AssetKeys.Audio.Weapons.shotgunShot, urls: ['assets/audio/weapon-shotgun-shot.mp3'] },
+  { key: AssetKeys.Audio.Weapons.compactShotgunShot, urls: ['assets/audio/weapon-compact-shotgun-shot.mp3'] },
+  { key: AssetKeys.Audio.Weapons.assaultRifleShot, urls: ['assets/audio/weapon-assault-rifle-shot.mp3'] },
+  { key: AssetKeys.Audio.Weapons.sniperRifleShot, urls: ['assets/audio/weapon-sniper-rifle-shot.mp3'] },
+  { key: AssetKeys.Audio.Weapons.grenadeLauncherShot, urls: ['assets/audio/weapon-grenade-launcher-shot.mp3'] },
+  { key: AssetKeys.Audio.Weapons.teslaShot, urls: ['assets/audio/weapon-tesla-shot.mp3'] },
+  { key: AssetKeys.Audio.Effects.grenadeExplosion, urls: ['assets/audio/effect-grenade-explosion.mp3'] },
+];
 
 export function loadAssetManifest(scene: Phaser.Scene): void {
   for (const asset of imageAssets) {
@@ -152,5 +185,9 @@ export function loadAssetManifest(scene: Phaser.Scene): void {
       margin: asset.margin,
       spacing: asset.spacing,
     });
+  }
+
+  for (const asset of audioAssets) {
+    scene.load.audio(asset.key, asset.urls);
   }
 }

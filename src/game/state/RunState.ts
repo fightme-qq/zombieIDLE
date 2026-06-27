@@ -22,12 +22,20 @@ export type RunStateOptions = {
 
 export const STARTER_WEAPON_ID: WeaponId = 'pistol';
 
+const BASE_HP_UPGRADE_COST = 25;
+const BASE_ARMOR_UPGRADE_COST = 35;
+const BASE_ARMOR_PER_LEVEL = 1;
+const BASE_ARMOR_MAX_LEVEL = 20;
+
 export class RunState {
   soft = 1000;
   hard = 25;
+  zombieKills = 0;
+  bossKills = 0;
   currentStage = 1;
   highestStage = 1;
   maxBunkerHp = 100;
+  baseArmorLevel = 0;
   gridCols: number = IDLE_GRID_CONFIG.startCols;
   gridRows: number = IDLE_GRID_CONFIG.startRows;
   activeCells: number = IDLE_GRID_CONFIG.startCols * IDLE_GRID_CONFIG.startRows;
@@ -77,6 +85,15 @@ export class RunState {
     return this.currentStage;
   }
 
+  recordBattleKills(kills: number, bossKilled: boolean): void {
+    if (bossKilled) {
+      this.bossKills += 1;
+      return;
+    }
+
+    this.zombieKills += Math.max(0, Math.floor(kills));
+  }
+
   get occupiedCells(): Set<string> {
     return getOccupiedCells(this.placedWeapons);
   }
@@ -109,6 +126,17 @@ export class RunState {
     return true;
   }
 
+  spendHard(cost: number): boolean {
+    if (cost < 0 || this.hard < cost) return false;
+    this.hard -= cost;
+    return true;
+  }
+
+  canAffordUnlock(weaponId: WeaponId): boolean {
+    const cost = WEAPONS[weaponId].unlockCost;
+    return cost.currency === 'hard' ? this.hard >= cost.amount : this.soft >= cost.amount;
+  }
+
   getWeaponUpgradeCost(id: number): number | null {
     const weapon = this.placedWeapons.find((placement) => placement.id === id);
     return weapon ? this.getWeaponStatUpgradeCost(weapon.weaponId, 'damage') : null;
@@ -130,8 +158,10 @@ export class RunState {
 
   unlockWeapon(weaponId: WeaponId): boolean {
     const progress = this.getWeaponProgress(weaponId);
+    const cost = WEAPONS[weaponId].unlockCost;
     if (progress.unlocked) return false;
-    if (!this.spendSoft(WEAPONS[weaponId].unlockCost)) return false;
+    const spent = cost.currency === 'hard' ? this.spendHard(cost.amount) : this.spendSoft(cost.amount);
+    if (!spent) return false;
     progress.unlocked = true;
     return true;
   }
@@ -179,10 +209,25 @@ export class RunState {
   }
 
   buyBunkerHp(): boolean {
-    if (this.soft < 25) return false;
-    this.soft -= 25;
+    if (this.soft < BASE_HP_UPGRADE_COST) return false;
+    this.soft -= BASE_HP_UPGRADE_COST;
     this.maxBunkerHp += 20;
     return true;
+  }
+
+  buyBaseArmor(): boolean {
+    if (this.baseArmorLevel >= BASE_ARMOR_MAX_LEVEL || this.soft < BASE_ARMOR_UPGRADE_COST) return false;
+    this.soft -= BASE_ARMOR_UPGRADE_COST;
+    this.baseArmorLevel += 1;
+    return true;
+  }
+
+  get baseArmor(): number {
+    return this.baseArmorLevel * BASE_ARMOR_PER_LEVEL;
+  }
+
+  getBaseArmorCost(): number | null {
+    return this.baseArmorLevel >= BASE_ARMOR_MAX_LEVEL ? null : BASE_ARMOR_UPGRADE_COST;
   }
 
   buyGridCell(): boolean {
@@ -197,6 +242,17 @@ export class RunState {
     return true;
   }
 
+  cheatAddGridCells(count: number): number {
+    const maxCells = this.maxGridCols * this.maxGridRows;
+    const before = this.activeCells;
+    this.activeCells = Math.min(maxCells, this.activeCells + Math.max(0, count));
+    const gridSize = getGridSizeForActiveCells(this.activeCells);
+    this.gridCols = gridSize.cols;
+    this.gridRows = gridSize.rows;
+
+    return this.activeCells - before;
+  }
+
   getNextGridCellCost(): number | null {
     return getNextCellPurchase(this.activeCells).cost;
   }
@@ -206,6 +262,33 @@ export class RunState {
     this.soft -= 25;
     this.rareChanceLevel += 1;
     return true;
+  }
+
+  cheatEquipEveryWeapon(): number {
+    this.gridCols = this.maxGridCols;
+    this.gridRows = this.maxGridRows;
+    this.activeCells = this.maxGridCols * this.maxGridRows;
+    this.placedWeapons.length = 0;
+
+    for (const weaponId of WEAPON_POOL) {
+      this.getWeaponProgress(weaponId).unlocked = true;
+      this.placeCheatWeapon(weaponId);
+    }
+
+    return this.placedWeapons.length;
+  }
+
+  private placeCheatWeapon(weaponId: WeaponId): boolean {
+    const rotations: WeaponRotation[] = [0, 1, 2, 3];
+    for (const rotation of rotations) {
+      for (let row = 0; row < this.gridRows; row += 1) {
+        for (let col = 0; col < this.gridCols; col += 1) {
+          if (this.placeWeaponWithLevel(weaponId, col, row, rotation, 1)) return true;
+        }
+      }
+    }
+
+    return false;
   }
 
   private cellKey(col: number, row: number): string {

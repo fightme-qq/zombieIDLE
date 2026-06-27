@@ -38,9 +38,15 @@ describe('Economy', () => {
     expect(getGridSizeForActiveCells(12)).toEqual({ cols: 6, rows: 2 });
     expect(getGridSizeForActiveCells(13)).toEqual({ cols: 6, rows: 3 });
     expect(getGridSizeForActiveCells(18)).toEqual({ cols: 6, rows: 3 });
-    expect(getGridSizeForActiveCells(24)).toEqual({ cols: 7, rows: 4 });
-    expect(getGridSizeForActiveCells(35)).toEqual({ cols: 8, rows: 5 });
-    expect(getGridSizeForActiveCells(80)).toEqual({ cols: 12, rows: 7 });
+    expect(getGridSizeForActiveCells(19)).toEqual({ cols: 6, rows: 4 });
+    expect(getGridSizeForActiveCells(22)).toEqual({ cols: 6, rows: 4 });
+    expect(getGridSizeForActiveCells(24)).toEqual({ cols: 6, rows: 4 });
+    expect(getGridSizeForActiveCells(25)).toEqual({ cols: 7, rows: 4 });
+    expect(getGridSizeForActiveCells(28)).toEqual({ cols: 7, rows: 4 });
+    expect(getGridSizeForActiveCells(29)).toEqual({ cols: 7, rows: 5 });
+    expect(getGridSizeForActiveCells(35)).toEqual({ cols: 7, rows: 5 });
+    expect(getGridSizeForActiveCells(36)).toEqual({ cols: 8, rows: 5 });
+    expect(getGridSizeForActiveCells(80)).toEqual({ cols: 11, rows: 8 });
     expect(getGridSizeForActiveCells(225)).toEqual({ cols: 15, rows: 15 });
   });
 

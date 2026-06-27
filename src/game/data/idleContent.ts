@@ -13,6 +13,11 @@ export const IDLE_STAGE_CONFIG = {
   checkpointInterval: 10,
 } as const;
 
+export const IDLE_WAVE_CONFIG = {
+  maxActiveEnemies: 32,
+  maxTotalEnemies: 110,
+} as const;
+
 export const IDLE_REWARD_CONFIG = {
   baseKillReward: 3,
   stageRewardScale: 1.08,

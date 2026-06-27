@@ -9,7 +9,7 @@ export type WeaponId =
   | 'grenadeLauncher';
 
 export type WeaponCategoryId = 'pistols' | 'shotguns' | 'rifles' | 'energy' | 'heavy';
-export type WeaponUpgradeStatId = 'damage' | 'fireRate' | 'handling' | 'special';
+export type WeaponUpgradeStatId = 'damage' | 'fireRate' | 'handling' | 'range' | 'critChance' | 'special';
 
 export type WeaponUpgradeStatDefinition = {
   id: WeaponUpgradeStatId;
@@ -17,6 +17,11 @@ export type WeaponUpgradeStatDefinition = {
   baseCost: number;
   costScale: number;
   maxLevel: number;
+};
+
+export type CurrencyCost = {
+  currency: 'soft' | 'hard';
+  amount: number;
 };
 
 export type WeaponDefinition = {
@@ -27,10 +32,14 @@ export type WeaponDefinition = {
   shape: readonly { col: number; row: number }[];
   damage: number;
   cooldownMs: number;
+  magazineSize: number;
+  reloadMs: number;
   projectileSpeed: number;
+  rangePx: number;
+  maxRangePx: number;
   spread: number;
   softCost: number;
-  unlockCost: number;
+  unlockCost: CurrencyCost;
   upgradeStats: readonly WeaponUpgradeStatDefinition[];
   description: string;
 };
@@ -47,13 +56,17 @@ const COMMON_UPGRADES = {
   damage: { id: 'damage', label: 'Damage', baseCost: 35, costScale: 1.45, maxLevel: 10 },
   fireRate: { id: 'fireRate', label: 'Fire Rate', baseCost: 55, costScale: 1.5, maxLevel: 8 },
   handling: { id: 'handling', label: 'Handling', baseCost: 40, costScale: 1.42, maxLevel: 8 },
-} as const satisfies Record<'damage' | 'fireRate' | 'handling', WeaponUpgradeStatDefinition>;
+  range: { id: 'range', label: 'Range', baseCost: 45, costScale: 1.48, maxLevel: 8 },
+  critChance: { id: 'critChance', label: 'Crit Chance', baseCost: 65, costScale: 1.5, maxLevel: 10 },
+} as const satisfies Record<'damage' | 'fireRate' | 'handling' | 'range' | 'critChance', WeaponUpgradeStatDefinition>;
 
 function upgradeSet(specialLabel: string, specialBaseCost: number): readonly WeaponUpgradeStatDefinition[] {
   return [
     COMMON_UPGRADES.damage,
     COMMON_UPGRADES.fireRate,
     COMMON_UPGRADES.handling,
+    COMMON_UPGRADES.range,
+    COMMON_UPGRADES.critChance,
     { id: 'special', label: specialLabel, baseCost: specialBaseCost, costScale: 1.62, maxLevel: 5 },
   ];
 }
@@ -69,12 +82,16 @@ export const WEAPONS: Record<WeaponId, WeaponDefinition> = {
       { col: 1, row: 0 },
       { col: 0, row: 1 },
     ],
-    damage: 10,
+    damage: 8,
     cooldownMs: 680,
+    magazineSize: 8,
+    reloadMs: 1200,
     projectileSpeed: 520,
+    rangePx: 220,
+    maxRangePx: 430,
     spread: 1,
     softCost: 0,
-    unlockCost: 0,
+    unlockCost: { currency: 'soft', amount: 0 },
     upgradeStats: upgradeSet('Double Tap', 90),
     description: 'Reliable starter weapon with a pistol footprint.',
   },
@@ -88,12 +105,16 @@ export const WEAPONS: Record<WeaponId, WeaponDefinition> = {
       { col: 1, row: 0 },
       { col: 0, row: 1 },
     ],
-    damage: 16,
+    damage: 8,
     cooldownMs: 560,
+    magazineSize: 10,
+    reloadMs: 1150,
     projectileSpeed: 560,
+    rangePx: 220,
+    maxRangePx: 430,
     spread: 1,
     softCost: 40,
-    unlockCost: 50,
+    unlockCost: { currency: 'soft', amount: 50 },
     upgradeStats: upgradeSet('Double Tap', 95),
     description: 'Быстро стреляет по одной цели.',
   },
@@ -109,10 +130,14 @@ export const WEAPONS: Record<WeaponId, WeaponDefinition> = {
     ],
     damage: 10,
     cooldownMs: 980,
+    magazineSize: 2,
+    reloadMs: 1750,
     projectileSpeed: 470,
+    rangePx: 220,
+    maxRangePx: 430,
     spread: 3,
     softCost: 75,
-    unlockCost: 120,
+    unlockCost: { currency: 'soft', amount: 120 },
     upgradeStats: upgradeSet('Extra Pellets', 140),
     description: 'Дает веер из трех выстрелов.',
   },
@@ -129,10 +154,14 @@ export const WEAPONS: Record<WeaponId, WeaponDefinition> = {
     ],
     damage: 26,
     cooldownMs: 1300,
+    magazineSize: 0,
+    reloadMs: 1800,
     projectileSpeed: 680,
+    rangePx: 360,
+    maxRangePx: 650,
     spread: 1,
     softCost: 120,
-    unlockCost: 400,
+    unlockCost: { currency: 'hard', amount: 8 },
     upgradeStats: upgradeSet('Chain Arc', 240),
     description: 'Медленнее, но больно бьет.',
   },
@@ -149,10 +178,14 @@ export const WEAPONS: Record<WeaponId, WeaponDefinition> = {
     ],
     damage: 9,
     cooldownMs: 260,
+    magazineSize: 24,
+    reloadMs: 1500,
     projectileSpeed: 640,
+    rangePx: 290,
+    maxRangePx: 720,
     spread: 1,
     softCost: 110,
-    unlockCost: 260,
+    unlockCost: { currency: 'soft', amount: 260 },
     upgradeStats: upgradeSet('Focus Fire', 170),
     description: 'Частая стрельба средним уроном.',
   },
@@ -169,10 +202,14 @@ export const WEAPONS: Record<WeaponId, WeaponDefinition> = {
     ],
     damage: 8,
     cooldownMs: 760,
+    magazineSize: 2,
+    reloadMs: 1550,
     projectileSpeed: 440,
+    rangePx: 220,
+    maxRangePx: 430,
     spread: 5,
     softCost: 95,
-    unlockCost: 180,
+    unlockCost: { currency: 'soft', amount: 180 },
     upgradeStats: upgradeSet('Wide Burst', 150),
     description: 'Короткий широкий веер.',
   },
@@ -189,10 +226,14 @@ export const WEAPONS: Record<WeaponId, WeaponDefinition> = {
     ],
     damage: 46,
     cooldownMs: 1700,
+    magazineSize: 5,
+    reloadMs: 2300,
     projectileSpeed: 820,
+    rangePx: 430,
+    maxRangePx: 720,
     spread: 1,
     softCost: 160,
-    unlockCost: 650,
+    unlockCost: { currency: 'hard', amount: 12 },
     upgradeStats: upgradeSet('Critical Shot', 300),
     description: 'Редкий мощный дальний выстрел.',
   },
@@ -210,10 +251,14 @@ export const WEAPONS: Record<WeaponId, WeaponDefinition> = {
     ],
     damage: 34,
     cooldownMs: 1450,
+    magazineSize: 1,
+    reloadMs: 2400,
     projectileSpeed: 390,
-    spread: 2,
+    rangePx: 220,
+    maxRangePx: 430,
+    spread: 1,
     softCost: 180,
-    unlockCost: 900,
+    unlockCost: { currency: 'hard', amount: 16 },
     upgradeStats: upgradeSet('Blast Radius', 360),
     description: 'Тяжелый залп по плотной группе.',
   },

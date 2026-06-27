@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { getEnemyStageStats } from '../../src/game/idle/EnemyScaling';
 import {
   createWeaponProgress,
   getEquippedWeaponDps,
@@ -59,5 +60,73 @@ describe('WeaponStats', () => {
 
     expect(getWeaponComputedStats('pistol', progress).spread).toBe(1);
     expect(getWeaponComputedStats('shotgun', progress).spread).toBeGreaterThan(getWeaponComputedStats('shotgun').spread);
+  });
+
+  it('fires one grenade by default before special upgrades add extra shots', () => {
+    const progress = createWeaponProgress(true);
+    progress.stats.special = 2;
+
+    expect(getWeaponComputedStats('grenadeLauncher').spread).toBe(1);
+    expect(getWeaponComputedStats('grenadeLauncher', progress).spread).toBeGreaterThan(1);
+  });
+
+  it('exposes magazine and reload stats for weapon rhythm', () => {
+    expect(getWeaponComputedStats('pistol').magazineSize).toBe(10);
+    expect(getWeaponComputedStats('pistol').reloadMs).toBe(1150);
+    expect(getWeaponComputedStats('grenadeLauncher').magazineSize).toBe(1);
+    expect(getWeaponComputedStats('tesla').magazineSize).toBe(0);
+  });
+
+  it('derives weapon range and increases it with range upgrades', () => {
+    const baseStats = getWeaponComputedStats('pistol');
+    const progress = createWeaponProgress(true);
+    progress.stats.range = 2;
+
+    expect(baseStats.rangePx).toBe(220);
+    expect(getWeaponComputedStats('pistol', progress).rangePx).toBeGreaterThan(baseStats.rangePx);
+    expect(getWeaponStatUpgradeCost('pistol', 'range', 0)).toBe(45);
+  });
+
+  it('scales weapon range toward class-specific caps', () => {
+    const maxed = createWeaponProgress(true);
+    maxed.stats.range = 8;
+
+    expect(getWeaponComputedStats('pistol', maxed).rangePx).toBe(430);
+    expect(getWeaponComputedStats('grenadeLauncher', maxed).rangePx).toBe(430);
+    expect(getWeaponComputedStats('assaultRifle').rangePx).toBe(290);
+    expect(getWeaponComputedStats('assaultRifle', maxed).rangePx).toBe(720);
+    expect(getWeaponComputedStats('sniperRifle').rangePx).toBe(430);
+    expect(getWeaponComputedStats('sniperRifle', maxed).rangePx).toBe(720);
+  });
+
+  it('keeps grenade launcher default and max range close like pistols', () => {
+    const maxed = createWeaponProgress(true);
+    maxed.stats.range = 8;
+
+    expect(getWeaponComputedStats('grenadeLauncher').rangePx).toBe(getWeaponComputedStats('pistol').rangePx);
+    expect(getWeaponComputedStats('grenadeLauncher', maxed).rangePx).toBe(getWeaponComputedStats('pistol', maxed).rangePx);
+  });
+
+  it('derives crit chance with a default 150% crit multiplier', () => {
+    const progress = createWeaponProgress(true);
+    progress.stats.critChance = 4;
+
+    const stats = getWeaponComputedStats('pistol', progress);
+
+    expect(stats.critChance).toBeCloseTo(0.12);
+    expect(stats.critMultiplier).toBe(1.5);
+    expect(getWeaponStatUpgradeCost('pistol', 'critChance', 0)).toBe(65);
+  });
+
+  it('lets a basic stage 1 zombie reach the base before one pistol can kill it', () => {
+    const pistol = getWeaponComputedStats('pistol');
+    const zombie = getEnemyStageStats(1, 'zombie');
+    const mountY = 808;
+    const bunkerLineY = 758;
+    const shotsToKill = Math.ceil(zombie.hp / pistol.damage);
+    const timeToLethalShotMs = (shotsToKill - 1) * pistol.cooldownMs;
+    const timeFromRangeToBaseMs = ((bunkerLineY - (mountY - pistol.rangePx)) / zombie.speed) * 1000;
+
+    expect(timeToLethalShotMs).toBeGreaterThan(timeFromRangeToBaseMs);
   });
 });

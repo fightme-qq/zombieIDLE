@@ -1,4 +1,6 @@
 import type { EnemyId } from './enemyData';
+import { isBossOnlyEnemy } from './bossData';
+import { IDLE_WAVE_CONFIG } from './idleContent';
 
 export type StageEnemyGroup = {
   enemyId: EnemyId;
@@ -9,6 +11,7 @@ export type StageWaveDefinition = {
   stage: number;
   enemies: readonly StageEnemyGroup[];
   totalEnemies: number;
+  maxActiveEnemies: number;
 };
 
 type StageEnemyCounts = Partial<Record<EnemyId, number>>;
@@ -57,21 +60,43 @@ export function getStageWave(stage: number): StageWaveDefinition {
   const block = Math.floor((stage - 1) / STAGE_WAVE_PATTERNS.length);
   const pattern = STAGE_WAVE_PATTERNS[patternIndex];
 
-  const enemies = ENEMY_ORDER.flatMap((enemyId): StageEnemyGroup[] => {
+  const uncappedEnemies = ENEMY_ORDER.flatMap((enemyId): StageEnemyGroup[] => {
+    if (isBossOnlyEnemy(enemyId)) return [];
+
     const baseCount = pattern[enemyId] ?? 0;
     if (baseCount === 0) return [];
 
-    const reinforcement = enemyId === 'zombie' ? block * 2 : block;
+    const reinforcement = enemyId === 'zombie' ? block * 4 : block * 2;
     return [{ enemyId, count: baseCount + reinforcement }];
   });
+  const enemies = capEnemyGroups(uncappedEnemies, IDLE_WAVE_CONFIG.maxTotalEnemies);
 
   return {
     stage,
     enemies,
     totalEnemies: enemies.reduce((total, group) => total + group.count, 0),
+    maxActiveEnemies: IDLE_WAVE_CONFIG.maxActiveEnemies,
   };
 }
 
 export function expandStageWave(wave: StageWaveDefinition): EnemyId[] {
   return wave.enemies.flatMap(({ enemyId, count }) => Array.from({ length: count }, () => enemyId));
+}
+
+function capEnemyGroups(groups: readonly StageEnemyGroup[], maxTotalEnemies: number): StageEnemyGroup[] {
+  const totalEnemies = groups.reduce((total, group) => total + group.count, 0);
+  if (totalEnemies <= maxTotalEnemies) return [...groups];
+
+  let capped = groups.map((group) => ({
+    enemyId: group.enemyId,
+    count: Math.max(1, Math.floor((group.count / totalEnemies) * maxTotalEnemies)),
+  }));
+
+  let cappedTotal = capped.reduce((total, group) => total + group.count, 0);
+  for (let index = 0; cappedTotal < maxTotalEnemies; index = (index + 1) % capped.length) {
+    capped[index].count += 1;
+    cappedTotal += 1;
+  }
+
+  return capped;
 }

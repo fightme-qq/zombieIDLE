@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { WEAPON_POOL } from '../../src/game/data/weaponData';
 import { getWeaponShape, RunState, STARTER_WEAPON_ID } from '../../src/game/state/RunState';
 
 function sortCells(cells: Array<{ col: number; row: number }>): Array<{ col: number; row: number }> {
@@ -54,6 +55,34 @@ describe('RunState weapon rotation', () => {
     expect(state.soft).toBe(39);
   });
 
+  it('unlocks early weapons with soft currency', () => {
+    const state = new RunState({ includeStarterPistol: false });
+    state.soft = 120;
+
+    expect(state.unlockWeapon('shotgun')).toBe(true);
+    expect(state.isWeaponUnlocked('shotgun')).toBe(true);
+    expect(state.soft).toBe(0);
+  });
+
+  it('unlocks advanced weapons with boss tokens instead of soft currency', () => {
+    const state = new RunState({ includeStarterPistol: false });
+    state.soft = 1000;
+    state.hard = 7;
+
+    expect(state.canAffordUnlock('tesla')).toBe(false);
+    expect(state.unlockWeapon('tesla')).toBe(false);
+    expect(state.soft).toBe(1000);
+    expect(state.hard).toBe(7);
+
+    state.hard = 8;
+
+    expect(state.canAffordUnlock('tesla')).toBe(true);
+    expect(state.unlockWeapon('tesla')).toBe(true);
+    expect(state.isWeaponUnlocked('tesla')).toBe(true);
+    expect(state.soft).toBe(1000);
+    expect(state.hard).toBe(0);
+  });
+
   it('upgrades a placed weapon with soft', () => {
     const state = new RunState();
     state.soft = 35;
@@ -75,6 +104,22 @@ describe('RunState weapon rotation', () => {
     expect(state.soft).toBe(34);
   });
 
+  it('buys grid cells one at a time with a growing price', () => {
+    const state = new RunState();
+    state.soft = 100;
+
+    expect(state.getNextGridCellCost()).toBe(25);
+    expect(state.buyGridCell()).toBe(true);
+    expect(state.activeCells).toBe(13);
+    expect(state.soft).toBe(75);
+    expect(state.getNextGridCellCost()).toBe(29);
+
+    expect(state.buyGridCell()).toBe(true);
+    expect(state.activeCells).toBe(14);
+    expect(state.soft).toBe(46);
+    expect(state.getNextGridCellCost()).toBe(32);
+  });
+
   it('tracks current and highest stage progress', () => {
     const state = new RunState();
 
@@ -85,6 +130,16 @@ describe('RunState weapon rotation', () => {
     expect(state.highestStage).toBe(2);
     expect(state.advanceStage()).toBe(3);
     expect(state.highestStage).toBe(3);
+  });
+
+  it('tracks defeated zombies and bosses separately', () => {
+    const state = new RunState();
+
+    state.recordBattleKills(6, false);
+    state.recordBattleKills(1, true);
+
+    expect(state.zombieKills).toBe(6);
+    expect(state.bossKills).toBe(1);
   });
 
   it('matches pistol footprint to the pistol sprite silhouette', () => {
@@ -134,5 +189,16 @@ describe('RunState weapon rotation', () => {
     expect(state.canPlaceWeapon('pistol', 0, 0, 1)).toBe(true);
     expect(state.placeWeapon('pistol', 0, 0, 1)).toBe(true);
     expect(state.occupiedCells).toEqual(new Set(['0:0', '1:0', '1:1']));
+  });
+
+  it('cheat equips one of every weapon for projectile testing', () => {
+    const state = new RunState();
+
+    expect(state.cheatEquipEveryWeapon()).toBe(WEAPON_POOL.length);
+    expect(state.gridCols).toBe(state.maxGridCols);
+    expect(state.gridRows).toBe(state.maxGridRows);
+    expect(state.activeCells).toBe(state.maxGridCols * state.maxGridRows);
+    expect(state.placedWeaponIds).toEqual(WEAPON_POOL);
+    expect(WEAPON_POOL.every((weaponId) => state.isWeaponUnlocked(weaponId))).toBe(true);
   });
 });

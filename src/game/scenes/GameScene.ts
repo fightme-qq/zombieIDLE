@@ -1,9 +1,9 @@
 import Phaser from 'phaser';
-import { AssetKeys } from '../assets/assetManifest';
+import { AssetKeys, EnemyFrameKeys } from '../assets/assetManifest';
 import { DEBUG_FLAGS } from '../config/debugFlags';
 import { moveRoadBound, ROAD_BOUNDS, ROAD_BOUNDS_LIMITS } from '../config/roadBounds';
 import { SceneKeys } from '../config/sceneKeys';
-import { getStageWave } from '../data/stageWaveData';
+import { ENEMIES, type EnemyId } from '../data/enemyData';
 import {
   WEAPON_CATEGORIES,
   WEAPONS,
@@ -12,13 +12,18 @@ import {
   type WeaponUpgradeStatId,
 } from '../data/weaponData';
 import { getWeaponComputedStats, getWeaponDps, getWeaponTotalLevel } from '../idle/WeaponStats';
+import { getBunkerWeaponMount } from '../idle/BunkerMounts';
 import { gameplayStart, gameplayStop } from '../platform/yandexGames';
+import { getDefaultEnemyScale, loadGameSettings, updateGameSettings, type GameSettings } from '../save/GameSettings';
+import { BATTLE_SNAPSHOT_REGISTRY_KEY } from './BattleScene';
+import type { BattleSnapshot, BattleWeaponRuntimeSnapshot } from '../systems/BattleSystem';
 import { getWeaponShape, rotateWeaponRotation, type PlacedWeapon, type WeaponRotation } from '../state/RunState';
 import { sharedRunState } from '../state/sharedRunState';
 import { createCurrencyValue, type CurrencyKind } from '../ui/currencyUi';
 import { toggleLocale, UI_TEXT } from '../ui/uiText';
 
 type PrepTab = 'fight' | 'equip' | 'upgrades' | 'shop';
+type UpgradesSubTab = 'weapons' | 'base';
 type DragState = {
   weaponId: WeaponId;
   fromPlacement: PlacedWeapon | null;
@@ -40,10 +45,21 @@ type PendingDragState = {
   startY: number;
 };
 
+type SellDropZone = {
+  container: Phaser.GameObjects.Container;
+  bg: Phaser.GameObjects.Rectangle;
+  title: Phaser.GameObjects.Text;
+  bounds: Phaser.Geom.Rectangle;
+};
+
 type GridMetrics = {
   slotSize: number;
+  slotWidth: number;
+  slotHeight: number;
   gap: number;
   pitch: number;
+  pitchX: number;
+  pitchY: number;
   cols: number;
   rows: number;
   startX: number;
@@ -74,6 +90,12 @@ type PanelContentBounds = {
 };
 
 type SidePanelSide = 'left' | 'right';
+type VolumeSettingId = 'musicVolume' | 'sfxVolume';
+
+type WeaponIconVisualTuning = {
+  scaleBoost?: number;
+  offsetY?: number;
+};
 
 const PREP_TABS: PrepTab[] = ['fight', 'equip', 'upgrades', 'shop'];
 const SIDE_PANEL_WIDTH = 430;
@@ -106,14 +128,23 @@ export class GameScene extends Phaser.Scene {
   private selectedWeapon: WeaponId | null = this.state.unlockedWeaponPool[0] ?? null;
   private selectedArsenalCategory: WeaponCategoryId = 'pistols';
   private selectedArsenalWeapon: WeaponId = 'pistol';
+  private activeUpgradesSubTab: UpgradesSubTab = 'weapons';
   private gridMetrics: GridMetrics | null = null;
   private dragState: DragState | null = null;
   private pendingDrag: PendingDragState | null = null;
   private weaponOfferViews: WeaponOfferView[] = [];
   private selectedRotation: WeaponRotation = 0;
   private selectedPlacementId: number | null = null;
+  private cheatsOpen = false;
+  private selectedCheatEnemyIndex = 0;
   private settingsOpen = false;
+  private settingsPanel: Phaser.GameObjects.Container | null = null;
+  private sellDropZone: SellDropZone | null = null;
   private readonly dragStartDistance = 12;
+  private weaponUpgradeScrollY = 0;
+  private weaponUpgradeScrollMax = 0;
+  private weaponUpgradeScrollBounds: Phaser.Geom.Rectangle | null = null;
+  private fightPanelRefreshMs = 0;
 
   constructor() {
     super(SceneKeys.Game);
@@ -123,14 +154,24 @@ export class GameScene extends Phaser.Scene {
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => this.shutdown());
     this.input.mouse?.disableContextMenu();
     this.input.on('pointerdown', this.handlePointerDown, this);
+    this.input.on('wheel', this.handleWheel, this);
     gameplayStart();
     this.showPrep();
   }
 
-  update(_time: number, _delta: number): void {}
+  update(_time: number, delta: number): void {
+    if (this.activeTab !== 'fight' || this.settingsOpen) return;
+
+    this.fightPanelRefreshMs -= delta;
+    if (this.fightPanelRefreshMs > 0) return;
+
+    this.fightPanelRefreshMs = 140;
+    this.showPrep();
+  }
 
   shutdown(): void {
     this.input.off('pointerdown', this.handlePointerDown, this);
+    this.input.off('wheel', this.handleWheel, this);
     gameplayStop();
   }
 
@@ -185,6 +226,7 @@ export class GameScene extends Phaser.Scene {
   private showPrep(): void {
     this.clearDragState(false);
     this.children.removeAll(true);
+    this.settingsPanel = null;
     this.gridMetrics = null;
     this.weaponOfferViews = [];
 
@@ -210,28 +252,35 @@ export class GameScene extends Phaser.Scene {
     }
 
     this.drawBottomTabs();
+    if (this.settingsOpen) {
+      this.drawSettingsPanel();
+    }
+  }
+
+  toggleSettingsPanel(): void {
+    this.settingsOpen = !this.settingsOpen;
+    this.showPrep();
   }
 
   private drawFightTab(): void {
     this.drawFightStatsPanel();
-    this.drawFightLoadoutPanel();
+    this.drawFightWeaponStatusPanel();
   }
 
   private drawFightStatsPanel(): void {
     const panel = this.getLeftPanel();
     const content = this.getPanelContentBounds(panel);
-    const activeCells = `${this.state.activeCells}/${this.state.maxGridCols * this.state.maxGridRows}`;
-    const rows: Array<[string, string, string]> = [
-      [UI_TEXT.fight.autoRunning, '', '#d8d3b4'],
-      [UI_TEXT.stats.mounted, `${this.state.equippedWeaponIds.length}`, '#f3ead2'],
-      [UI_TEXT.stats.dps, `${Math.round(this.state.equippedDps)}`, '#d6b85a'],
-      [UI_TEXT.stats.cells, activeCells, '#f3ead2'],
-      [UI_TEXT.stats.stage, `${this.state.currentStage}`, '#f3ead2'],
-      [UI_TEXT.stats.best, `${this.state.highestStage}`, '#f3ead2'],
-      [UI_TEXT.stats.base, `${this.state.maxBunkerHp}`, '#88c56b'],
+    const rows: Array<{ label: string; value: string; color: string; currency?: CurrencyKind }> = [
+      { label: UI_TEXT.fight.autoRunning, value: '', color: '#d8d3b4' },
+      { label: UI_TEXT.stats.kills, value: `${this.state.zombieKills}`, color: '#d6b85a' },
+      { label: UI_TEXT.stats.bossKills, value: `${this.state.bossKills}`, color: '#6fb7ff' },
+      { label: UI_TEXT.stats.best, value: `${this.state.highestStage}`, color: '#f3ead2' },
+      { label: UI_TEXT.stats.cells, value: `${this.state.activeCells}`, color: '#f3ead2' },
+      { label: UI_TEXT.stats.mounted, value: `${this.state.equippedWeaponIds.length}`, color: '#f3ead2' },
+      { label: UI_TEXT.stats.dps, value: `${Math.round(this.state.equippedDps)}`, color: '#d6b85a' },
     ];
 
-    rows.forEach(([label, value, color], index) => {
+    rows.forEach(({ label, value, color, currency }, index) => {
       const y = content.top + 8 + index * 42;
       this.add.rectangle(content.centerX, y, content.width, 32, index === 0 ? 0x152015 : 0x0b100d, 0.82).setStrokeStyle(1, TERMINAL_UI.strokeDim, 0.72);
       if (value === '') {
@@ -239,52 +288,302 @@ export class GameScene extends Phaser.Scene {
         return;
       }
 
-      this.createFittedText(content.left + 18, y, label, 160, 15, '#aeb89b', 0);
+      if (currency) {
+        createCurrencyValue(this, content.left + 18, y, '', currency, { maxWidth: 90, fontSize: 16, iconSize: 22, originX: 0 });
+      } else {
+        this.createFittedText(content.left + 18, y, label, 160, 15, '#aeb89b', 0);
+      }
       this.createFittedText(content.right - 18, y, value, 120, 18, color, 1);
     });
+  }
+
+  private drawFightWeaponStatusPanel(): void {
+    const panel = this.getRightPanel();
+    const content = this.getPanelContentBounds(panel);
+    const placements = this.state.placedWeapons;
+
+    this.createFittedText(content.left, content.top, 'Оружие на бункере', content.width, 22, '#f3ead2', 0);
+    this.add.rectangle(content.centerX, content.top + 24, content.width, 1, TERMINAL_UI.accent, 0.44);
+
+    const bunkerTop = content.top + 48;
+    const bunkerHeight = 142;
+    this.drawFightStatusBunker(content, bunkerTop, bunkerHeight, placements);
+
+    if (placements.length === 0) {
+      this.createFittedText(content.centerX, bunkerTop + bunkerHeight + 52, 'Поставь оружие на сетку', content.width - 40, 18, '#aeb89b');
+      return;
+    }
+
+    const columns = placements.length === 1 ? 1 : 2;
+    const gap = 8;
+    const cardsTop = bunkerTop + bunkerHeight + 14;
+    const cardWidth = Math.floor((content.width - gap * (columns - 1)) / columns);
+    const rows = Math.ceil(placements.length / columns);
+    const availableHeight = content.bottom - cardsTop;
+    const cardHeight = Phaser.Math.Clamp(Math.floor((availableHeight - gap * (rows - 1)) / rows), 56, placements.length <= 2 ? 112 : 92);
+
+    placements.forEach((placement, index) => {
+      const col = index % columns;
+      const row = Math.floor(index / columns);
+      const x = content.left + cardWidth / 2 + col * (cardWidth + gap);
+      const y = cardsTop + cardHeight / 2 + row * (cardHeight + gap);
+      this.drawFightStatusWeaponCard(x, y, cardWidth, cardHeight, placement);
+    });
+  }
+
+  private drawFightStatusBunker(content: PanelContentBounds, top: number, height: number, placements: readonly PlacedWeapon[]): void {
+    const x = content.centerX;
+    const y = top + height / 2;
+    const width = content.width;
+
+    this.add.rectangle(x, y, width, height, 0x0b100d, 0.78).setStrokeStyle(2, TERMINAL_UI.strokeDim, 0.76);
+    this.add.rectangle(x, top + 44, width - 72, 74, 0x263037, 0.32).setStrokeStyle(1, TERMINAL_UI.strokeDim, 0.56);
+
+    for (let index = 1; index < this.state.gridCols; index += 1) {
+      const lineX = content.left + 36 + ((width - 72) * index) / this.state.gridCols;
+      this.add.line(0, 0, lineX, top + 9, lineX, top + 79, 0xd8d3b4, 0.1).setOrigin(0).setLineWidth(1);
+    }
+
+    const bunkerY = top + height - 34;
+    this.add.rectangle(x, bunkerY + 13, width - 42, 28, 0x33403b, 0.94).setStrokeStyle(1, TERMINAL_UI.stroke, 0.78);
+    this.add.rectangle(x, bunkerY - 2, width - 82, 26, 0x53625a, 0.32).setStrokeStyle(1, TERMINAL_UI.strokeDim, 0.52);
+    this.add.rectangle(x - 86, bunkerY + 4, 58, 24, 0x5f5948, 0.46);
+    this.add.rectangle(x + 84, bunkerY + 4, 58, 24, 0x5f5948, 0.46);
+    this.add.rectangle(x, bunkerY + 3, 54, 32, 0x20251f, 0.72).setStrokeStyle(1, TERMINAL_UI.accent, 0.32);
+
+    placements.forEach((placement) => this.drawFightStatusBunkerWeapon(content, top, height, placement));
+  }
+
+  private drawFightStatusBunkerWeapon(content: PanelContentBounds, top: number, height: number, placement: PlacedWeapon): void {
+    const mount = getBunkerWeaponMount(placement, { cols: this.state.gridCols, rows: this.state.gridRows }, { width: this.scale.width, height: this.scale.height });
+    const bunkerLeft = ROAD_BOUNDS.left + 42;
+    const bunkerRight = ROAD_BOUNDS.right - 42;
+    const mountT = Phaser.Math.Clamp((mount.x - bunkerLeft) / Math.max(1, bunkerRight - bunkerLeft), 0, 1);
+    const shape = getWeaponShape(placement.weaponId, placement.rotation);
+    const maxRow = Math.max(...shape.map((cell) => cell.row));
+    const centerRow = placement.row + (maxRow + 1) / 2;
+    const rowT = Phaser.Math.Clamp(centerRow / Math.max(1, this.state.gridRows), 0, 1);
+    const x = content.left + 36 + (content.width - 72) * mountT;
+    const y = top + height - 54 - rowT * 38;
+
+    this.add.line(0, 0, x, y + 12, x, top + height - 22, TERMINAL_UI.accent, 0.28).setOrigin(0).setLineWidth(2);
+    this.drawWeaponIcon(x, y, placement.weaponId, 58, 42, placement.rotation, { scaleBoost: 1.16 }).setDepth(4);
+  }
+
+  private drawFightStatusWeaponCard(x: number, y: number, width: number, height: number, placement: PlacedWeapon): void {
+    const progress = this.state.getWeaponProgress(placement.weaponId);
+    const stats = getWeaponComputedStats(placement.weaponId, progress);
+    const runtime = this.getBattleWeaponRuntime(placement.id);
+    const top = y - height / 2;
+    const left = x - width / 2;
+    const right = x + width / 2;
+
+    this.add.rectangle(x, y, width, height, 0x10120f, 0.82).setStrokeStyle(1, TERMINAL_UI.strokeDim, 0.76);
+    this.add.rectangle(x, top + 7, width - 12, 2, TERMINAL_UI.accent, 0.24);
+
+    const iconMaxWidth = Math.min(92, width * 0.42);
+    const iconMaxHeight = Math.max(42, height - 30);
+    this.drawWeaponIcon(left + iconMaxWidth / 2 + 10, y - 2, placement.weaponId, iconMaxWidth, iconMaxHeight, placement.rotation, { scaleBoost: 1.26 });
+
+    const statusLeft = left + iconMaxWidth + 20;
+    const statusWidth = Math.max(54, right - statusLeft - 12);
+    const primaryY = top + height * 0.42;
+    const secondaryY = top + height - 18;
+
+    if (placement.weaponId === 'tesla') {
+      const overheatMs = runtime?.overheatMs ?? 0;
+      this.drawFightTeslaHeatMeter(statusLeft, primaryY, statusWidth, runtime);
+      this.drawFightCooldownMeter(statusLeft, secondaryY, statusWidth, overheatMs > 0 ? overheatMs : runtime?.shotCooldownMs ?? 0, overheatMs > 0 ? 2200 : stats.cooldownMs, overheatMs > 0 ? 0xc44531 : TERMINAL_UI.accent);
+      return;
+    }
+
+    const ammo = runtime?.ammo ?? stats.magazineSize;
+    const magazineSize = runtime?.magazineSize ?? stats.magazineSize;
+    const reloadMs = runtime?.reloadMs ?? 0;
+    this.drawFightMagazineMeter(statusLeft, primaryY, statusWidth, ammo, magazineSize, reloadMs > 0);
+    this.drawFightCooldownMeter(statusLeft, secondaryY, statusWidth, reloadMs > 0 ? reloadMs : runtime?.shotCooldownMs ?? 0, reloadMs > 0 ? runtime?.reloadDurationMs ?? stats.reloadMs : stats.cooldownMs, reloadMs > 0 ? 0x8fbf63 : TERMINAL_UI.accent);
+  }
+
+  private drawFightMagazineMeter(left: number, y: number, width: number, ammo: number, magazineSize: number, reloading: boolean): void {
+    const segments = Math.min(14, Math.max(1, magazineSize));
+    const gap = 2;
+    const segmentWidth = Math.max(3, Math.floor((width - gap * (segments - 1)) / segments));
+    const shownAmmo = Math.round((Phaser.Math.Clamp(ammo, 0, magazineSize) / Math.max(1, magazineSize)) * segments);
+
+    for (let index = 0; index < segments; index += 1) {
+      const filled = index < shownAmmo;
+      const color = reloading ? 0x53625a : filled ? TERMINAL_UI.accent : 0x050805;
+      const alpha = reloading ? 0.7 : filled ? 0.95 : 0.72;
+      this.add.rectangle(left + index * (segmentWidth + gap), y, segmentWidth, 9, color, alpha).setOrigin(0, 0.5).setStrokeStyle(1, filled ? 0xf1d37a : TERMINAL_UI.strokeDim, 0.38);
+    }
+  }
+
+  private drawFightCooldownMeter(left: number, y: number, width: number, remainingMs: number, totalMs: number, color: number): void {
+    const progress = totalMs <= 0 ? 1 : 1 - Phaser.Math.Clamp(remainingMs / totalMs, 0, 1);
+    this.add.rectangle(left, y, width, 9, 0x050805, 0.86).setOrigin(0, 0.5).setStrokeStyle(1, TERMINAL_UI.strokeDim, 0.72);
+    this.add.rectangle(left, y, Math.max(2, width * progress), 9, color, 0.94).setOrigin(0, 0.5);
+  }
+
+  private drawFightTeslaHeatMeter(left: number, y: number, width: number, runtime: BattleWeaponRuntimeSnapshot | null): void {
+    const heat = runtime?.heat ?? 0;
+    const overheat = (runtime?.overheatMs ?? 0) > 0;
+    const color = overheat ? 0xc44531 : heat > 0.72 ? 0xd6b85a : 0x3dd8ff;
+    this.add.rectangle(left, y, width, 10, 0x06171b, 0.92).setOrigin(0, 0.5).setStrokeStyle(1, color, 0.62);
+    this.add.rectangle(left, y, Math.max(2, width * Phaser.Math.Clamp(heat, 0, 1)), 10, color, 0.86).setOrigin(0, 0.5);
+    this.add.rectangle(left + width - 7, y, 8, 10, 0xc44531, 0.72).setOrigin(0, 0.5);
+  }
+
+  private getBattleWeaponRuntime(placementId: number): BattleWeaponRuntimeSnapshot | null {
+    const snapshot = this.registry.get(BATTLE_SNAPSHOT_REGISTRY_KEY) as BattleSnapshot | undefined;
+    return snapshot?.weapons.find((weapon) => weapon.id === placementId) ?? null;
+  }
+
+  private drawFightWeaponCardsPanel(): void {
+    const panel = this.getRightPanel();
+    const content = this.getPanelContentBounds(panel);
+    const placements = this.state.placedWeapons;
+
+    this.createFittedText(content.left, content.top, 'Оружие на бункере', content.width, 22, '#f3ead2', 0);
+    this.add.rectangle(content.centerX, content.top + 24, content.width, 1, TERMINAL_UI.accent, 0.44);
+
+    if (placements.length === 0) {
+      this.createFittedText(content.centerX, content.top + 172, 'Поставь оружие на сетку', content.width - 40, 18, '#aeb89b');
+      return;
+    }
+
+    const columns = 2;
+    const gap = 10;
+    const gridTop = content.top + 48;
+    const cardWidth = Math.floor((content.width - gap) / columns);
+    const rows = Math.ceil(placements.length / columns);
+    const availableHeight = content.bottom - gridTop - 4;
+    const cardHeight = Phaser.Math.Clamp(Math.floor((availableHeight - gap * (rows - 1)) / rows), 74, 118);
+
+    placements.forEach((placement, index) => {
+      const col = index % columns;
+      const row = Math.floor(index / columns);
+      const x = content.left + cardWidth / 2 + col * (cardWidth + gap);
+      const y = gridTop + cardHeight / 2 + row * (cardHeight + gap);
+      this.drawFightWeaponCard(x, y, cardWidth, cardHeight, placement);
+    });
+  }
+
+  private drawFightWeaponCard(x: number, y: number, width: number, height: number, placement: PlacedWeapon): void {
+    const progress = this.state.getWeaponProgress(placement.weaponId);
+    const stats = getWeaponComputedStats(placement.weaponId, progress);
+    const top = y - height / 2;
+    const left = x - width / 2;
+
+    this.add.rectangle(x, y, width, height, 0x10120f, 0.82).setStrokeStyle(1, TERMINAL_UI.strokeDim, 0.76);
+    const bunkerY = top + Math.max(44, height * 0.55);
+    const bunkerWidth = width - 24;
+    this.add.rectangle(x, bunkerY + 13, bunkerWidth, 18, 0x33403b, 0.92).setStrokeStyle(1, TERMINAL_UI.stroke, 0.68);
+    this.add.rectangle(x, bunkerY - 10, bunkerWidth, 28, 0x29343a, 0.34).setStrokeStyle(1, TERMINAL_UI.strokeDim, 0.5);
+
+    const mount = getBunkerWeaponMount(placement, { cols: this.state.gridCols, rows: this.state.gridRows }, { width: this.scale.width, height: this.scale.height });
+    const bunkerLeft = ROAD_BOUNDS.left + 42;
+    const bunkerRight = ROAD_BOUNDS.right - 42;
+    const mountT = Phaser.Math.Clamp((mount.x - bunkerLeft) / Math.max(1, bunkerRight - bunkerLeft), 0, 1);
+    const muzzleX = left + 14 + (width - 28) * mountT;
+    this.add.line(0, 0, muzzleX, bunkerY - 18, muzzleX, bunkerY + 2, TERMINAL_UI.accent, 0.35).setOrigin(0).setLineWidth(1);
+    this.drawWeaponIcon(muzzleX, bunkerY - 1, placement.weaponId, 40, 26, placement.rotation);
+
+    const barY = top + height - 12;
+    const barWidth = width - 24;
+    if (placement.weaponId === 'tesla') {
+      this.drawTeslaHeatPreview(x, barY, barWidth);
+      return;
+    }
+
+    this.drawMagazinePreview(x, barY, barWidth, stats.magazineSize);
+    return;
+    const cooldownSeconds = 0;
+    this.createFittedText(left + 10, barY - 14, `КД ${cooldownSeconds.toFixed(1)}с`, 84, 11, '#aeb89b', 0);
+  }
+
+  private drawMagazinePreview(x: number, y: number, width: number, magazineSize: number): void {
+    const segments = Math.min(12, Math.max(1, magazineSize));
+    const gap = 2;
+    const segmentWidth = Math.max(3, Math.floor((width - gap * (segments - 1)) / segments));
+    const totalWidth = segments * segmentWidth + (segments - 1) * gap;
+    const startX = x - totalWidth / 2 + segmentWidth / 2;
+
+    for (let index = 0; index < segments; index += 1) {
+      this.add.rectangle(startX + index * (segmentWidth + gap), y, segmentWidth, 8, TERMINAL_UI.accent, 0.92).setStrokeStyle(1, 0xf1d37a, 0.38);
+    }
+  }
+
+  private drawTeslaHeatPreview(x: number, y: number, width: number): void {
+    this.add.rectangle(x, y, width, 8, 0x06171b, 0.92).setStrokeStyle(1, 0x3dd8ff, 0.6);
+    this.add.rectangle(x - width / 2, y, width * 0.42, 8, 0x3dd8ff, 0.86).setOrigin(0, 0.5);
+    this.add.rectangle(x + width / 2 - 6, y, 10, 8, 0xc44531, 0.78);
   }
 
   private drawFightLoadoutPanel(): void {
     const panel = this.getRightPanel();
     const content = this.getPanelContentBounds(panel);
-    const placements = this.state.placedWeapons.slice(0, 5);
+    const placements = this.state.placedWeapons;
 
-    this.createFittedText(content.left, content.top, UI_TEXT.tabs.equip, content.width, 22, '#f3ead2', 0);
+    this.createFittedText(content.left, content.top, 'Оружейная схема', content.width, 22, '#f3ead2', 0);
     this.add.rectangle(content.centerX, content.top + 24, content.width, 1, TERMINAL_UI.accent, 0.44);
 
-    const summaryRows: Array<{ label: string; value: string; color: string; currency?: CurrencyKind }> = [
-      { label: UI_TEXT.stats.kills, value: `${getStageWave(this.state.currentStage).totalEnemies}`, color: '#d6b85a' },
-      { label: '', value: '+', color: '#f3ead2', currency: 'soft' },
-      { label: UI_TEXT.stats.base, value: `${this.state.maxBunkerHp}`, color: '#88c56b' },
-    ];
+    const mapTop = content.top + 48;
+    const mapHeight = 122;
+    this.add.rectangle(content.centerX, mapTop + mapHeight / 2, content.width, mapHeight, 0x0b100d, 0.74).setStrokeStyle(2, TERMINAL_UI.strokeDim, 0.72);
+    this.add.rectangle(content.centerX, mapTop + mapHeight - 24, content.width - 32, 28, 0x33403b, 0.9).setStrokeStyle(1, TERMINAL_UI.stroke, 0.7);
+    this.add.rectangle(content.centerX, mapTop + 34, content.width - 74, 92, 0x29343a, 0.42).setStrokeStyle(1, TERMINAL_UI.strokeDim, 0.6);
+    this.add.rectangle(content.centerX, mapTop + 34, 2, 92, 0xd8d3b4, 0.22);
+    this.add.rectangle(content.centerX - 54, mapTop + 34, 2, 92, 0xd8d3b4, 0.14);
+    this.add.rectangle(content.centerX + 54, mapTop + 34, 2, 92, 0xd8d3b4, 0.14);
+    this.createFittedText(content.left + 18, mapTop + mapHeight - 24, 'Бункер / точки вылета', content.width - 36, 13, '#aeb89b', 0);
 
-    summaryRows.forEach(({ label, value, color, currency }, index) => {
-      const y = content.top + 58 + index * 38;
-      this.add.rectangle(content.centerX, y, content.width, 30, 0x0b100d, 0.78).setStrokeStyle(1, TERMINAL_UI.strokeDim, 0.68);
-      if (currency) {
-        createCurrencyValue(this, content.left + 18, y, '', currency, { maxWidth: 90, fontSize: 16, iconSize: 22, originX: 0 });
-      } else {
-        this.createFittedText(content.left + 18, y, label, 180, 14, '#aeb89b', 0);
-      }
-      this.createFittedText(content.right - 18, y, value, 120, 17, color, 1);
-    });
+    placements.forEach((placement) => this.drawFightWeaponMount(content, mapTop, mapHeight, placement));
 
-    this.createFittedText(content.left, content.top + 186, UI_TEXT.stats.mounted, content.width, 18, '#d8d3b4', 0);
-    this.add.rectangle(content.centerX, content.top + 208, content.width, 1, TERMINAL_UI.strokeDim, 0.72);
+    this.createFittedText(content.left, mapTop + mapHeight + 44, 'КД оружия', content.width, 18, '#d8d3b4', 0);
+    this.add.rectangle(content.centerX, mapTop + mapHeight + 64, content.width, 1, TERMINAL_UI.strokeDim, 0.72);
+    placements.slice(0, 5).forEach((placement, index) => this.drawFightWeaponCooldownRow(content, mapTop + mapHeight + 96 + index * 44, placement));
+  }
 
-    placements.forEach((placement, index) => {
-      const weapon = WEAPONS[placement.weaponId];
-      const dps = getWeaponDps(placement.weaponId, this.state.getWeaponProgress(placement.weaponId));
-      const y = content.top + 240 + index * 42;
-      this.add.rectangle(content.centerX, y, content.width, 32, 0x10120f, 0.76).setStrokeStyle(1, TERMINAL_UI.strokeDim, 0.62);
-      this.createFittedText(content.left + 18, y, weapon.name, 210, 15, '#f3ead2', 0);
-      this.createFittedText(content.right - 18, y, `${UI_TEXT.stats.dps} ${Math.round(dps)}`, 130, 15, '#d6b85a', 1);
-    });
+  private drawFightWeaponMount(content: PanelContentBounds, mapTop: number, mapHeight: number, placement: PlacedWeapon): void {
+    const mount = getBunkerWeaponMount(placement, { cols: this.state.gridCols, rows: this.state.gridRows }, { width: this.scale.width, height: this.scale.height });
+    const bunkerLeft = ROAD_BOUNDS.left + 42;
+    const bunkerRight = ROAD_BOUNDS.right - 42;
+    const t = Phaser.Math.Clamp((mount.x - bunkerLeft) / Math.max(1, bunkerRight - bunkerLeft), 0, 1);
+    const shape = getWeaponShape(placement.weaponId, placement.rotation);
+    const maxRow = Math.max(...shape.map((cell) => cell.row));
+    const centerRow = placement.row + (maxRow + 1) / 2;
+    const rowT = Phaser.Math.Clamp(centerRow / Math.max(1, this.state.gridRows), 0, 1);
+    const x = content.left + 34 + (content.width - 68) * t;
+    const y = mapTop + mapHeight - 42 + (rowT - 0.5) * 28;
+
+    this.add.circle(x, y, 17, 0x0b100d, 0.88).setStrokeStyle(1, TERMINAL_UI.accent, 0.82);
+    const icon = this.drawWeaponIcon(x, y, placement.weaponId, 42, 32, placement.rotation);
+    icon.setDepth(3);
+    this.add.line(0, 0, x, y - 18, x, mapTop + 36, TERMINAL_UI.accent, 0.34).setOrigin(0).setLineWidth(2);
+  }
+
+  private drawFightWeaponCooldownRow(content: PanelContentBounds, y: number, placement: PlacedWeapon): void {
+    const weapon = WEAPONS[placement.weaponId];
+    const progress = this.state.getWeaponProgress(placement.weaponId);
+    const stats = getWeaponComputedStats(placement.weaponId, progress);
+    const dps = getWeaponDps(placement.weaponId, progress);
+    const cooldownSeconds = stats.cooldownMs / 1000;
+    const cooldownT = Phaser.Math.Clamp((cooldownSeconds - 0.45) / 3.2, 0.08, 1);
+    const barWidth = 86;
+
+    this.add.rectangle(content.centerX, y, content.width, 34, 0x10120f, 0.76).setStrokeStyle(1, TERMINAL_UI.strokeDim, 0.62);
+    this.drawWeaponIcon(content.left + 24, y, placement.weaponId, 34, 24, placement.rotation);
+    this.createFittedText(content.left + 52, y - 7, weapon.name, 146, 13, '#f3ead2', 0);
+    this.createFittedText(content.left + 52, y + 9, `КД ${cooldownSeconds.toFixed(1)}с`, 94, 12, '#aeb89b', 0);
+    this.add.rectangle(content.right - 116, y + 8, barWidth, 7, 0x050805, 0.8).setStrokeStyle(1, TERMINAL_UI.strokeDim, 0.7);
+    this.add.rectangle(content.right - 116 - barWidth / 2, y + 8, barWidth * cooldownT, 7, TERMINAL_UI.accent, 0.92).setOrigin(0, 0.5);
+    this.createFittedText(content.right - 18, y - 5, `${UI_TEXT.stats.dps} ${Math.round(dps)}`, 92, 12, '#d6b85a', 1);
   }
 
   private drawEquipTab(): void {
     this.drawEquipSummary();
     this.drawLoadoutGrid();
+    this.drawGridCellPurchaseButton();
     this.drawWeaponOffer();
   }
 
@@ -305,8 +604,96 @@ export class GameScene extends Phaser.Scene {
   }
 
   private drawUpgradesTab(): void {
+    this.drawUpgradesSubTabs();
+    if (this.activeUpgradesSubTab === 'base') {
+      this.drawBaseUpgradesTab();
+      return;
+    }
+
     this.drawArsenalList();
     this.drawSelectedArsenalWeapon();
+  }
+
+  private drawUpgradesSubTabs(): void {
+    const panel = this.getLeftPanel();
+    const y = panel.y - panel.height / 2 + 20;
+    const tabWidth = 128;
+    const gap = 8;
+    const tabs: Array<{ id: UpgradesSubTab; label: string }> = [
+      { id: 'weapons', label: UI_TEXT.upgrades.weaponsTitle },
+      { id: 'base', label: UI_TEXT.upgrades.baseTitle },
+    ];
+
+    tabs.forEach((tab, index) => {
+      const x = panel.x - tabWidth / 2 - gap / 2 + index * (tabWidth + gap);
+      this.createSegmentTab(x, y, tabWidth, tab.label, this.activeUpgradesSubTab === tab.id, () => {
+        this.activeUpgradesSubTab = tab.id;
+        this.showPrep();
+      });
+    });
+  }
+
+  private drawBaseUpgradesTab(): void {
+    const left = this.getPanelContentBounds(this.getLeftPanel());
+    const right = this.getPanelContentBounds(this.getRightPanel());
+
+    this.createFittedText(left.left, left.top + 42, UI_TEXT.upgrades.baseTitle, left.width, 24, '#f3ead2', 0);
+    this.add.rectangle(left.centerX, left.top + 72, left.width, 1, TERMINAL_UI.accent, 0.44);
+    this.createFittedText(left.left + 18, left.top + 118, `${UI_TEXT.upgrades.durability}: ${this.state.maxBunkerHp}`, left.width - 36, 20, '#88c56b', 0);
+    this.createFittedText(left.left + 18, left.top + 154, `${UI_TEXT.upgrades.armor}: ${this.state.baseArmor}`, left.width - 36, 20, '#d6b85a', 0);
+    this.createFittedText(
+      left.left + 18,
+      left.top + 202,
+      'Base upgrades help zombies reach the bunker without making early fights instantly fatal.',
+      left.width - 36,
+      15,
+      '#aeb89b',
+      0,
+    ).setWordWrapWidth(left.width - 36);
+
+    this.createFittedText(right.left, right.top + 42, UI_TEXT.upgrades.baseTitle, right.width, 24, '#f3ead2', 0);
+    this.add.rectangle(right.centerX, right.top + 72, right.width, 1, TERMINAL_UI.accent, 0.44);
+    this.drawBaseUpgradeRow(
+      right.centerX,
+      right.top + 126,
+      right.width,
+      UI_TEXT.upgrades.durability,
+      '+20 HP',
+      `HP ${this.state.maxBunkerHp}`,
+      25,
+      () => this.buyBaseUpgrade('hp'),
+    );
+    this.drawBaseUpgradeRow(
+      right.centerX,
+      right.top + 186,
+      right.width,
+      UI_TEXT.upgrades.armor,
+      UI_TEXT.upgrades.armorEffect(this.state.baseArmorLevel + 1),
+      `${UI_TEXT.upgrades.level} ${this.state.baseArmorLevel}/20`,
+      this.state.getBaseArmorCost(),
+      () => this.buyBaseUpgrade('armor'),
+    );
+  }
+
+  private drawBaseUpgradeRow(
+    x: number,
+    y: number,
+    width: number,
+    label: string,
+    effect: string,
+    level: string,
+    cost: number | null,
+    onClick: () => void,
+  ): void {
+    const maxed = cost === null;
+    const affordable = cost !== null && this.state.soft >= cost;
+    this.drawWeaponUpgradeRow(x, y, width, label, effect, level, maxed ? UI_TEXT.upgrades.max : `${cost}`, affordable, maxed, onClick);
+  }
+
+  private buyBaseUpgrade(kind: 'hp' | 'armor'): void {
+    const bought = kind === 'hp' ? this.state.buyBunkerHp() : this.state.buyBaseArmor();
+    this.showPrep();
+    this.flashHint(bought ? UI_TEXT.messages.upgradeBought : UI_TEXT.messages.upgradeUnavailable);
   }
 
   private drawGlobalUpgradeStrip(): void {
@@ -333,6 +720,7 @@ export class GameScene extends Phaser.Scene {
       this.createSegmentTab(x, tabY, tabWidth, UI_TEXT.weaponCategories[category.id], active, () => {
         this.selectedArsenalCategory = category.id;
         this.selectedArsenalWeapon = this.getFirstWeaponInCategory(category.id);
+        this.weaponUpgradeScrollY = 0;
         this.showPrep();
       });
     });
@@ -360,13 +748,16 @@ export class GameScene extends Phaser.Scene {
           0,
         );
       } else {
-        this.createCurrencyLine(content.left + 136, y + 13, UI_TEXT.upgrades.unlock, weapon.unlockCost, 'soft', content.width - 168, 13, '#d58c7e');
+        this.createCurrencyLine(content.left + 136, y + 13, UI_TEXT.upgrades.unlock, weapon.unlockCost.amount, weapon.unlockCost.currency, content.width - 168, 13, '#d58c7e');
       }
 
       this.add
         .zone(content.centerX, y, content.width, 60)
         .setInteractive({ useHandCursor: true })
         .on('pointerdown', () => {
+          if (this.selectedArsenalWeapon !== weaponId) {
+            this.weaponUpgradeScrollY = 0;
+          }
           this.selectedArsenalWeapon = weaponId;
           this.showPrep();
         });
@@ -394,12 +785,13 @@ export class GameScene extends Phaser.Scene {
     this.drawWeaponStatPill(content.left + 42, content.top + 154, `${UI_TEXT.stats.damageShort} ${stats.damage}`);
     this.drawWeaponStatPill(content.left + 136, content.top + 154, `${UI_TEXT.stats.rateShort} ${(1000 / stats.cooldownMs).toFixed(1)}/s`);
     this.drawWeaponStatPill(content.left + 242, content.top + 154, `${UI_TEXT.stats.shotsShort} ${stats.spread}`);
-    this.drawWeaponStatPill(content.right - 42, content.top + 154, `${UI_TEXT.stats.speedShort} ${stats.projectileSpeed}`);
+    this.drawWeaponStatPill(content.right - 42, content.top + 154, `${UI_TEXT.stats.rangeShort} ${stats.rangePx}`);
 
     if (!progress.unlocked) {
-      this.createCurrencyButton(content.centerX, content.top + 240, 230, 46, UI_TEXT.upgrades.unlock, weapon.unlockCost, 'soft', this.state.soft >= weapon.unlockCost ? 0x4a743c : 0x4d302c, () => {
+      const affordable = this.state.canAffordUnlock(weaponId);
+      this.createCurrencyButton(content.centerX, content.top + 240, 230, 46, UI_TEXT.upgrades.unlock, weapon.unlockCost.amount, weapon.unlockCost.currency, affordable ? 0x4a743c : 0x4d302c, () => {
         if (!this.state.unlockWeapon(weaponId)) {
-        this.flashHint(UI_TEXT.messages.notEnoughSoft);
+        this.flashHint(weapon.unlockCost.currency === 'hard' ? UI_TEXT.messages.notEnoughHard : UI_TEXT.messages.notEnoughSoft);
         return;
       }
       this.selectFirstAvailableOffer();
@@ -409,8 +801,25 @@ export class GameScene extends Phaser.Scene {
       return;
     }
 
+    const listTop = content.top + 194;
+    const viewportHeight = Math.max(94, content.bottom - listTop - 4);
+    const rowSpacing = 50;
+    const rowHeight = 42;
+    const contentHeight = weapon.upgradeStats.length === 0 ? 0 : rowHeight + (weapon.upgradeStats.length - 1) * rowSpacing;
+    this.weaponUpgradeScrollMax = Math.max(0, contentHeight - viewportHeight);
+    this.weaponUpgradeScrollY = Phaser.Math.Clamp(this.weaponUpgradeScrollY, 0, this.weaponUpgradeScrollMax);
+    this.weaponUpgradeScrollBounds = new Phaser.Geom.Rectangle(content.left, listTop, content.width, viewportHeight);
+
+    const listMaskShape = this.add.graphics();
+    listMaskShape.fillStyle(0xffffff, 1);
+    listMaskShape.fillRect(content.left, listTop - 2, content.width, viewportHeight + 4);
+    listMaskShape.setVisible(false);
+
+    const listContainer = this.add.container(0, listTop - this.weaponUpgradeScrollY);
+    listContainer.setMask(listMaskShape.createGeometryMask());
+
     weapon.upgradeStats.forEach((stat, index) => {
-      const y = content.top + 214 + index * 50;
+      const y = 21 + index * rowSpacing;
       const level = progress.stats[stat.id];
       const cost = this.state.getWeaponStatUpgradeCost(weaponId, stat.id);
       const maxed = cost === null;
@@ -434,8 +843,11 @@ export class GameScene extends Phaser.Scene {
         this.showPrep();
         this.flashHint(`${this.getWeaponStatLabel(stat.id)} ${UI_TEXT.upgrades.upgraded}`);
         },
+        listContainer,
       );
     });
+
+    this.drawWeaponUpgradeScrollbar(content.right - 4, listTop, viewportHeight);
   }
 
   private getWeaponsInCategory(categoryId: WeaponCategoryId): WeaponId[] {
@@ -460,11 +872,7 @@ export class GameScene extends Phaser.Scene {
 
   private drawArsenalWeaponIcon(x: number, y: number, weaponId: WeaponId, maxWidth: number, maxHeight: number): Phaser.GameObjects.Container {
     const boundsBoost = weaponId === 'tesla' ? 1.28 : 1;
-    const icon = this.drawWeaponIcon(x, y, weaponId, maxWidth * boundsBoost, maxHeight * boundsBoost, this.getArsenalIconRotation(weaponId));
-    if (weaponId === 'sniperRifle' || weaponId === 'tesla') {
-      icon.setScale(-1, 1);
-    }
-    return icon;
+    return this.drawWeaponIcon(x, y, weaponId, maxWidth * boundsBoost, maxHeight * boundsBoost, this.getArsenalIconRotation(weaponId));
   }
 
   private drawShopTab(): void {
@@ -499,31 +907,40 @@ export class GameScene extends Phaser.Scene {
     const rows = this.state.gridRows;
     const startY = content.top + 34;
     const availableWidth = content.width;
-    const availableHeight = content.bottom - startY - 12;
-    const slotSize = Math.max(22, Math.floor(Math.min(58, (availableWidth - gap * (cols - 1)) / cols, (availableHeight - gap * (rows - 1)) / rows)));
+    const availableHeight = content.bottom - startY - 74;
+    const gridBoxSize = Math.floor(Math.min(availableWidth, availableHeight));
+    const slotSize = Math.max(16, Math.floor(Math.min((gridBoxSize - gap * (cols - 1)) / cols, (gridBoxSize - gap * (rows - 1)) / rows)));
+    const slotWidth = slotSize;
+    const slotHeight = slotSize;
     const pitch = slotSize + gap;
-    const startX = panel.x - (pitch * cols - gap) / 2;
-    const panelWidth = pitch * cols + 18;
-    const panelHeight = pitch * rows + 18;
+    const pitchX = pitch;
+    const pitchY = pitch;
+    const gridWidth = pitchX * cols - gap;
+    const gridHeight = pitchY * rows - gap;
+    const startX = panel.x - gridWidth / 2;
+    const gridCenterY = startY + gridBoxSize / 2;
+    const gridStartY = gridCenterY - gridHeight / 2;
+    const panelWidth = gridWidth + 18;
+    const panelHeight = gridHeight + 18;
     const occupied = this.state.occupiedCells;
 
-    this.gridMetrics = { slotSize, gap, pitch, cols, rows, startX, startY };
+    this.gridMetrics = { slotSize, slotWidth, slotHeight, gap, pitch, pitchX, pitchY, cols, rows, startX, startY: gridStartY };
 
     this.add
-      .rectangle(startX + (pitch * cols - gap) / 2, startY + (pitch * rows - gap) / 2, panelWidth, panelHeight, 0x182216, 1)
+      .rectangle(startX + gridWidth / 2, gridStartY + gridHeight / 2, panelWidth, panelHeight, 0x182216, 1)
       .setStrokeStyle(3, TERMINAL_UI.stroke, 0.95);
 
     for (let row = 0; row < rows; row += 1) {
       for (let col = 0; col < cols; col += 1) {
-        const x = startX + col * pitch;
-        const y = startY + row * pitch;
+        const x = startX + col * pitchX;
+        const y = gridStartY + row * pitchY;
         const active = this.state.isCellActive(col, row);
         const filled = occupied.has(`${col}:${row}`);
         const fill = !active ? TERMINAL_UI.slotLocked : filled ? 0x3c5c35 : TERMINAL_UI.slot;
         const alpha = active ? 1 : 0.48;
 
         const rect = this.add
-          .rectangle(x + slotSize / 2, y + slotSize / 2, slotSize, slotSize, fill, alpha)
+          .rectangle(x + slotWidth / 2, y + slotHeight / 2, slotWidth, slotHeight, fill, alpha)
           .setStrokeStyle(2, active ? 0x4f6445 : 0x263226, active ? 1 : 0.55)
           .setInteractive({ useHandCursor: true });
 
@@ -564,12 +981,12 @@ export class GameScene extends Phaser.Scene {
       const shape = getWeaponShape(placement.weaponId, placement.rotation);
       const maxCol = Math.max(...shape.map((cell) => cell.col));
       const maxRow = Math.max(...shape.map((cell) => cell.row));
-      const x = startX + (placement.col + (maxCol + 1) / 2) * pitch - gap / 2;
-      const y = startY + (placement.row + (maxRow + 1) / 2) * pitch - gap / 2;
+      const x = startX + (placement.col + (maxCol + 1) / 2) * pitchX - gap / 2;
+      const y = gridStartY + (placement.row + (maxRow + 1) / 2) * pitchY - gap / 2;
       const iconBounds = this.getGridIconBounds(placement.weaponId, placement.rotation);
-      const icon = this.drawWeaponIcon(x, y, placement.weaponId, iconBounds.width, iconBounds.height, placement.rotation);
-      const hitWidth = (maxCol + 1) * pitch;
-      const hitHeight = (maxRow + 1) * pitch;
+      const icon = this.drawWeaponIcon(x, y, placement.weaponId, iconBounds.width, iconBounds.height, placement.rotation, this.getGridWeaponIconTuning(placement.weaponId));
+      const hitWidth = (maxCol + 1) * pitchX;
+      const hitHeight = (maxRow + 1) * pitchY;
       if (placement.id === this.selectedPlacementId) {
         this.add.rectangle(x, y, hitWidth, hitHeight, 0x000000, 0).setStrokeStyle(3, TERMINAL_UI.accent, 0.95).setDepth(13);
       }
@@ -657,6 +1074,37 @@ export class GameScene extends Phaser.Scene {
     hint.setAlpha(0.58);
   }
 
+  private drawGridCellPurchaseButton(): void {
+    const content = this.getPanelContentBounds(this.getLeftPanel());
+    const cost = this.state.getNextGridCellCost();
+    const width = 194;
+    const height = 44;
+    const x = content.left + width / 2;
+    const y = content.bottom - height / 2;
+    const hintGap = 14;
+    const hintWidth = content.width - width - hintGap;
+    const hintX = content.right - hintWidth / 2;
+
+    this.createFittedText(hintX, y, UI_TEXT.equip.rotateHint, hintWidth, 13, '#aeb89b').setLineSpacing(1);
+
+    if (cost === null) {
+      this.add.rectangle(x, y, width, height, 0x293027, 1).setStrokeStyle(2, TERMINAL_UI.strokeDim, 0.8);
+      this.createFittedText(x, y, `${UI_TEXT.buttons.addGridCell} · ${UI_TEXT.upgrades.max}`, width - 20, 18, '#8d9684');
+      return;
+    }
+
+    const affordable = this.state.soft >= cost;
+    this.createCurrencyButton(x, y, width, height, UI_TEXT.buttons.addGridCell, cost, 'soft', affordable ? 0x4a743c : 0x4d302c, () => {
+      if (!this.state.buyGridCell()) {
+        this.flashHint(UI_TEXT.messages.upgradeUnavailable);
+        return;
+      }
+
+      this.showPrep();
+      this.flashHint(UI_TEXT.messages.upgradeBought);
+    });
+  }
+
   private drawUpgradePanel(): void {
     const x = this.scale.width - 250;
     const y = 138;
@@ -727,23 +1175,44 @@ export class GameScene extends Phaser.Scene {
       });
     });
 
-    this.createButton(width - 92, y, 148, 52, UI_TEXT.buttons.settings, this.settingsOpen ? 0x6b4f86 : TERMINAL_UI.panel, () => {
-      this.settingsOpen = !this.settingsOpen;
+    this.createButton(width - 92, y, 148, 52, UI_TEXT.cheats.button, this.cheatsOpen ? 0x6b4f86 : TERMINAL_UI.panel, () => {
+      this.cheatsOpen = !this.cheatsOpen;
       this.showPrep();
     });
 
-    if (this.settingsOpen) {
-      this.drawSettingsPanel();
+    if (this.cheatsOpen) {
+      this.drawCheatsPanel();
     }
   }
 
-  private drawSettingsPanel(): void {
-    const x = this.scale.width - 156;
-    const y = this.scale.height - 330;
+  private drawCheatsPanel(): void {
+    const panelWidth = Math.min(350, this.scale.width - 28);
+    const panelHeight = Math.min(640, this.scale.height - 94);
+    const x = Phaser.Math.Clamp(this.scale.width - panelWidth / 2 - 18, panelWidth / 2 + 14, this.scale.width - panelWidth / 2 - 14);
+    const y = 66 + panelHeight / 2;
+    const left = x - panelWidth / 2;
+    const right = x + panelWidth / 2;
+    const top = y - panelHeight / 2;
+    const settings = loadGameSettings();
+    const selectedEnemyId = this.getSelectedCheatEnemyId();
+    const selectedEnemyScale = selectedEnemyId ? settings.enemyScales[selectedEnemyId] ?? settings.enemyScale : settings.enemyScale;
+    const selectedEnemyLabel = selectedEnemyId ? this.getEnemyCheatLabel(selectedEnemyId) : UI_TEXT.cheats.allEnemies;
+    const previewEnemy = (selectedEnemyId ? ENEMIES.find((enemy) => enemy.id === selectedEnemyId) : ENEMIES[0]) ?? ENEMIES[0];
+    const displaySize = Math.round(previewEnemy.displaySize * selectedEnemyScale);
+    const onlyWhenCheatsOpen = (action: () => void): (() => void) => {
+      return () => {
+        if (!this.cheatsOpen) return;
+        action();
+      };
+    };
+    const sectionLine = (lineY: number): void => {
+      this.add.rectangle(x, lineY, panelWidth - 36, 1, TERMINAL_UI.accent, 0.28).setDepth(81);
+    };
 
-    this.add.rectangle(x, y, 280, 500, TERMINAL_UI.panelStrong, 0.96).setDepth(80).setStrokeStyle(2, 0x6b4f86, 0.95);
+    this.add.rectangle(x, y, panelWidth, panelHeight, TERMINAL_UI.panelStrong, 0.97).setDepth(80).setStrokeStyle(2, 0x6b4f86, 0.95);
+    this.add.rectangle(x, top + 8, panelWidth - 20, 2, TERMINAL_UI.accent, 0.42).setDepth(81);
     this.add
-      .text(x, y - 176, UI_TEXT.settings.title, {
+      .text(left + 20, top + 30, UI_TEXT.cheats.title, {
         fontFamily: 'Trebuchet MS, Arial, sans-serif',
         fontSize: '20px',
         color: '#f3ead2',
@@ -751,42 +1220,179 @@ export class GameScene extends Phaser.Scene {
         strokeThickness: 3,
       })
       .setDepth(81)
-      .setOrigin(0.5);
+      .setOrigin(0, 0.5);
 
-    this.createFittedText(x - 104, y - 142, UI_TEXT.settings.language, 100, 15, '#aeb89b', 0).setDepth(82);
-    this.createButton(x + 48, y - 142, 132, 36, UI_TEXT.settings.switchLanguage, 0x4c5f87, () => {
+    this.createButton(right - 27, top + 28, 34, 34, 'X', 0x20291c, onlyWhenCheatsOpen(() => {
+      this.cheatsOpen = false;
+      this.showPrep();
+    }), 81);
+
+    const languageY = top + 64;
+    this.createFittedText(left + 22, languageY, UI_TEXT.settings.language, 82, 15, '#aeb89b', 0).setDepth(82);
+    this.createButton(right - 78, languageY, 136, 36, UI_TEXT.settings.switchLanguage, 0x4c5f87, onlyWhenCheatsOpen(() => {
       toggleLocale();
       this.showPrep();
-    }, 81);
+    }), 81);
 
-    this.createFittedText(x, y - 102, UI_TEXT.settings.devTools, 220, 16, '#d8d3b4').setDepth(82);
+    sectionLine(top + 92);
 
-    this.createButton(x, y - 68, 218, 36, DEBUG_FLAGS.showRoadBounds ? UI_TEXT.cheats.hideBounds : UI_TEXT.cheats.showBounds, 0x2f6062, () => {
+    const roadTop = top + 114;
+    this.createFittedText(left + 22, roadTop, UI_TEXT.cheats.roadBounds, 130, 15, '#d8d3b4', 0).setDepth(82);
+    this.createButton(right - 78, roadTop, 136, 32, DEBUG_FLAGS.showRoadBounds ? UI_TEXT.cheats.hideBounds : UI_TEXT.cheats.showBounds, 0x2f6062, onlyWhenCheatsOpen(() => {
       DEBUG_FLAGS.showRoadBounds = !DEBUG_FLAGS.showRoadBounds;
       this.showPrep();
-    }, 81);
+    }), 81);
 
-    this.createFittedText(x, y - 24, UI_TEXT.cheats.roadBounds, 220, 16, '#d8d3b4').setDepth(82);
     this.createFittedText(
       x,
-      y,
+      roadTop + 28,
       `${UI_TEXT.cheats.leftShort} ${ROAD_BOUNDS.left}   ${UI_TEXT.cheats.rightShort} ${ROAD_BOUNDS.right}   ${ROAD_BOUNDS.right - ROAD_BOUNDS.left}`,
-      220,
+      panelWidth - 54,
       14,
       '#bdfcff',
     ).setDepth(82);
 
-    this.createFittedText(x - 104, y + 36, UI_TEXT.cheats.boundLeft, 84, 14, '#aeb89b', 0).setDepth(82);
-    this.createButton(x - 4, y + 36, 72, 30, '-1', 0x2f6062, () => this.adjustRoadBound('left', -ROAD_BOUNDS_LIMITS.step), 81);
-    this.createButton(x + 78, y + 36, 72, 30, '+1', 0x2f6062, () => this.adjustRoadBound('left', ROAD_BOUNDS_LIMITS.step), 81);
+    this.createFittedText(left + 22, roadTop + 58, UI_TEXT.cheats.boundLeft, 76, 14, '#aeb89b', 0).setDepth(82);
+    this.createButton(left + 132, roadTop + 58, 72, 30, '-1', 0x2f6062, onlyWhenCheatsOpen(() => this.adjustRoadBound('left', -ROAD_BOUNDS_LIMITS.step)), 81);
+    this.createButton(left + 216, roadTop + 58, 72, 30, '+1', 0x2f6062, onlyWhenCheatsOpen(() => this.adjustRoadBound('left', ROAD_BOUNDS_LIMITS.step)), 81);
 
-    this.createFittedText(x - 104, y + 74, UI_TEXT.cheats.boundRight, 84, 14, '#aeb89b', 0).setDepth(82);
-    this.createButton(x - 4, y + 74, 72, 30, '-1', 0x2f6062, () => this.adjustRoadBound('right', -ROAD_BOUNDS_LIMITS.step), 81);
-    this.createButton(x + 78, y + 74, 72, 30, '+1', 0x2f6062, () => this.adjustRoadBound('right', ROAD_BOUNDS_LIMITS.step), 81);
+    this.createFittedText(left + 22, roadTop + 92, UI_TEXT.cheats.boundRight, 76, 14, '#aeb89b', 0).setDepth(82);
+    this.createButton(left + 132, roadTop + 92, 72, 30, '-1', 0x2f6062, onlyWhenCheatsOpen(() => this.adjustRoadBound('right', -ROAD_BOUNDS_LIMITS.step)), 81);
+    this.createButton(left + 216, roadTop + 92, 72, 30, '+1', 0x2f6062, onlyWhenCheatsOpen(() => this.adjustRoadBound('right', ROAD_BOUNDS_LIMITS.step)), 81);
 
-    this.createCurrencyButton(x, y + 124, 218, 36, '+', 1000, 'soft', 0x4a743c, () => this.applyCheat('soft'), 81);
-    this.createButton(x, y + 170, 218, 36, UI_TEXT.cheats.stage, 0x4c5f87, () => this.applyCheat('stage'), 81);
-    this.createButton(x, y + 216, 218, 36, UI_TEXT.cheats.base, 0x4a743c, () => this.applyCheat('base'), 81);
+    sectionLine(roadTop + 116);
+
+    const enemyTop = roadTop + 132;
+    this.createFittedText(left + 22, enemyTop, UI_TEXT.cheats.enemyType, 96, 14, '#aeb89b', 0).setDepth(82);
+    this.createButton(left + 118, enemyTop, 40, 30, '<', 0x2f6062, onlyWhenCheatsOpen(() => this.selectCheatEnemy(-1)), 81);
+    this.createFittedText(x + 26, enemyTop, selectedEnemyLabel, 120, 13, '#f3ead2').setDepth(82);
+    this.createButton(right - 38, enemyTop, 40, 30, '>', 0x2f6062, onlyWhenCheatsOpen(() => this.selectCheatEnemy(1)), 81);
+
+    this.add.rectangle(x, enemyTop + 63, panelWidth - 54, 100, 0x10170f, 0.62).setDepth(81).setStrokeStyle(1, TERMINAL_UI.stroke, 0.6);
+    this.drawCheatEnemyPreview(previewEnemy.id, x, enemyTop + 58, displaySize);
+    this.createFittedText(x, enemyTop + 114, `${displaySize}px   ${Math.round(selectedEnemyScale * 100)}%`, panelWidth - 70, 14, '#d8d3b4').setDepth(82);
+
+    const scaleY = enemyTop + 146;
+    this.createFittedText(left + 22, scaleY, UI_TEXT.cheats.enemyScale, 92, 14, '#aeb89b', 0).setDepth(82);
+    this.createButton(left + 120, scaleY, 58, 30, '-5%', 0x2f6062, onlyWhenCheatsOpen(() => this.adjustEnemyScale(-0.05)), 81);
+    this.createButton(right - 42, scaleY, 58, 30, '+5%', 0x2f6062, onlyWhenCheatsOpen(() => this.adjustEnemyScale(0.05)), 81);
+    this.createButton(x, scaleY + 32, panelWidth - 78, 28, UI_TEXT.cheats.enemyScaleReset, 0x4c5f87, onlyWhenCheatsOpen(() => this.resetEnemyScale()), 81);
+
+    sectionLine(scaleY + 54);
+
+    const actionTop = scaleY + 76;
+    this.createButton(x, actionTop, panelWidth - 78, 30, UI_TEXT.cheats.spawnEachType, 0x6b4f36, onlyWhenCheatsOpen(() => this.spawnCheatEnemies()), 81);
+    this.createButton(x, actionTop + 34, panelWidth - 78, 30, UI_TEXT.cheats.equipEveryWeapon, 0x6b4f36, onlyWhenCheatsOpen(() => this.equipEveryWeaponCheat()), 81);
+    this.createCurrencyButton(x - 68, actionTop + 68, 130, 30, '+', 1000, 'soft', 0x4a743c, onlyWhenCheatsOpen(() => this.applyCheat('soft')), 81);
+    this.createButton(x + 68, actionTop + 68, 130, 30, '+1M S+H', 0x4a743c, onlyWhenCheatsOpen(() => this.applyCheat('million')), 81);
+    this.createButton(x - 68, actionTop + 102, 130, 30, UI_TEXT.cheats.stage, 0x4c5f87, onlyWhenCheatsOpen(() => this.applyCheat('stage')), 81);
+    this.createButton(x + 68, actionTop + 102, 130, 30, '+10 cells', 0x4c5f87, onlyWhenCheatsOpen(() => this.applyCheat('cells10')), 81);
+    this.createButton(x, actionTop + 136, panelWidth - 78, 30, UI_TEXT.cheats.base, 0x4a743c, onlyWhenCheatsOpen(() => this.applyCheat('base')), 81);
+  }
+
+  private drawSettingsPanel(): void {
+    const settings = loadGameSettings();
+    const panelWidth = Math.min(400, this.scale.width - 28);
+    const panelHeight = 268;
+    const x = Phaser.Math.Clamp(this.scale.width - panelWidth / 2 - 18, panelWidth / 2 + 14, this.scale.width - panelWidth / 2 - 14);
+    const y = 164;
+    const panel = this.add.container(x, y).setDepth(1100);
+    const bg = this.add.rectangle(0, 0, panelWidth, panelHeight, TERMINAL_UI.panelStrong, 0.98).setStrokeStyle(2, TERMINAL_UI.accent, 0.95);
+    const shine = this.add.rectangle(0, -panelHeight / 2 + 8, panelWidth - 18, 2, TERMINAL_UI.accent, 0.48);
+    const title = this.add
+      .text(-panelWidth / 2 + 18, -panelHeight / 2 + 30, UI_TEXT.settings.title, {
+        fontFamily: 'Trebuchet MS, Arial, sans-serif',
+        fontSize: '21px',
+        color: '#f3ead2',
+        stroke: '#050805',
+        strokeThickness: 3,
+      })
+      .setOrigin(0, 0.5);
+    const close = this.createSettingsAction(panelWidth / 2 - 25, -panelHeight / 2 + 28, 34, 34, 'X', () => this.toggleSettingsPanel());
+
+    panel.add([bg, shine, title, close]);
+    this.drawSettingsLanguageRow(panel, panelWidth, -74);
+    this.drawSettingsVolumeRow(panel, panelWidth, -14, UI_TEXT.settings.sfxVolume, 'sfxVolume', settings);
+    this.drawSettingsVolumeRow(panel, panelWidth, 58, UI_TEXT.settings.musicVolume, 'musicVolume', settings);
+    this.settingsPanel = panel;
+  }
+
+  private drawSettingsLanguageRow(panel: Phaser.GameObjects.Container, panelWidth: number, y: number): void {
+    const left = -panelWidth / 2 + 24;
+    const labelWidth = 122;
+    const buttonLeft = left + labelWidth + 12;
+    const buttonRight = panelWidth / 2 - 62;
+    const buttonWidth = Math.max(118, buttonRight - buttonLeft);
+    const label = this.add.text(left, y, UI_TEXT.settings.language, this.getSettingsTextStyle(15)).setOrigin(0, 0.5);
+    const button = this.createSettingsAction(buttonLeft + buttonWidth / 2, y, buttonWidth, 40, UI_TEXT.settings.switchLanguage, () => {
+      toggleLocale();
+      this.showPrep();
+    });
+    panel.add([label, button]);
+  }
+
+  private drawSettingsVolumeRow(
+    panel: Phaser.GameObjects.Container,
+    panelWidth: number,
+    y: number,
+    labelText: string,
+    setting: VolumeSettingId,
+    settings: GameSettings,
+  ): void {
+    const value = settings[setting];
+    const left = -panelWidth / 2 + 24;
+    const labelWidth = 122;
+    const minusX = left + labelWidth + 18;
+    const plusX = panelWidth / 2 - 44;
+    const barLeft = minusX + 32;
+    const barRight = plusX - 32;
+    const barWidth = Math.max(96, barRight - barLeft);
+    const barX = barLeft + barWidth / 2;
+    const label = this.add.text(left, y, labelText, this.getSettingsTextStyle(15)).setOrigin(0, 0.5);
+    const minus = this.createSettingsAction(minusX, y, 38, 38, '-', () => this.adjustVolumeSetting(setting, -0.1));
+    const plus = this.createSettingsAction(plusX, y, 38, 38, '+', () => this.adjustVolumeSetting(setting, 0.1));
+    const barBg = this.add.rectangle(barX, y, barWidth, 12, 0x050805, 0.88).setStrokeStyle(1, TERMINAL_UI.strokeDim, 0.9);
+    const barFill = this.add.rectangle(barX - barWidth / 2, y, Math.max(2, barWidth * value), 12, TERMINAL_UI.accent, 0.95).setOrigin(0, 0.5);
+    const valueText = this.add.text(barX, y + 22, `${Math.round(value * 100)}%`, this.getSettingsTextStyle(13)).setOrigin(0.5);
+    const barZone = this.add.zone(barX, y, barWidth + 12, 34).setInteractive({ useHandCursor: true });
+
+    barZone.on('pointerdown', (pointer: Phaser.Input.Pointer) => {
+      const left = panel.x + barX - barWidth / 2;
+      this.setVolumeSetting(setting, (pointer.x - left) / barWidth);
+    });
+
+    panel.add([label, minus, barBg, barFill, valueText, barZone, plus]);
+  }
+
+  private createSettingsAction(x: number, y: number, width: number, height: number, label: string, onClick: () => void): Phaser.GameObjects.Container {
+    const action = this.add.container(x, y);
+    const bg = this.add.rectangle(0, 0, width, height, 0x20291c, 1).setStrokeStyle(2, TERMINAL_UI.stroke, 0.95);
+    const text = this.add.text(0, 0, label, this.getSettingsTextStyle(Math.min(16, Math.floor(height * 0.45)))).setOrigin(0.5);
+    action.add([bg, text]);
+    action.setSize(width, height).setInteractive({ useHandCursor: true });
+    action.on('pointerdown', onClick);
+    action.on('pointerover', () => bg.setStrokeStyle(2, TERMINAL_UI.accent, 1));
+    action.on('pointerout', () => bg.setStrokeStyle(2, TERMINAL_UI.stroke, 0.95));
+    return action;
+  }
+
+  private adjustVolumeSetting(setting: VolumeSettingId, delta: number): void {
+    this.setVolumeSetting(setting, loadGameSettings()[setting] + delta);
+  }
+
+  private setVolumeSetting(setting: VolumeSettingId, value: number): void {
+    updateGameSettings({ [setting]: Math.round(Phaser.Math.Clamp(value, 0, 1) * 10) / 10 });
+    this.showPrep();
+  }
+
+  private getSettingsTextStyle(fontSize: number): Phaser.Types.GameObjects.Text.TextStyle {
+    return {
+      fontFamily: 'Trebuchet MS, Arial, sans-serif',
+      fontSize: `${fontSize}px`,
+      color: '#f3ead2',
+      stroke: '#050805',
+      strokeThickness: 2,
+    };
   }
 
   private drawOverlayPanels(): void {
@@ -837,6 +1443,18 @@ export class GameScene extends Phaser.Scene {
     this.createFittedText(x, y, label, 74, 12, '#d8d3b4');
   }
 
+  private drawWeaponUpgradeScrollbar(x: number, top: number, height: number): void {
+    if (this.weaponUpgradeScrollMax <= 0) return;
+
+    const thumbHeight = Math.max(36, height * (height / (height + this.weaponUpgradeScrollMax)));
+    const travel = Math.max(1, height - thumbHeight);
+    const progress = this.weaponUpgradeScrollY / this.weaponUpgradeScrollMax;
+    const thumbY = top + thumbHeight / 2 + travel * progress;
+
+    this.add.rectangle(x, top + height / 2, 4, height, 0x050805, 0.58).setStrokeStyle(1, TERMINAL_UI.strokeDim, 0.7);
+    this.add.rectangle(x, thumbY, 8, thumbHeight, TERMINAL_UI.accent, 0.92).setStrokeStyle(1, 0xf1d37a, 0.82);
+  }
+
   private drawWeaponUpgradeRow(
     x: number,
     y: number,
@@ -848,26 +1466,37 @@ export class GameScene extends Phaser.Scene {
     affordable: boolean,
     maxed: boolean,
     onClick: () => void,
+    parent?: Phaser.GameObjects.Container,
   ): void {
-    const row = this.add
+    const created: Phaser.GameObjects.GameObject[] = [];
+    const track = <T extends Phaser.GameObjects.GameObject>(object: T): T => {
+      created.push(object);
+      return object;
+    };
+
+    const row = track(
+      this.add
       .rectangle(x, y, width, 42, 0x0b100d, 0.94)
       .setStrokeStyle(2, maxed ? TERMINAL_UI.strokeDim : affordable ? TERMINAL_UI.stroke : 0x5b3530, maxed ? 0.72 : 0.95)
-      .setInteractive({ useHandCursor: !maxed });
-    this.add.rectangle(x - width / 2 + 3, y, 4, 30, maxed ? TERMINAL_UI.strokeDim : affordable ? TERMINAL_UI.success : TERMINAL_UI.danger, maxed ? 0.65 : 0.95);
-    this.createFittedText(x - width / 2 + 16, y - 8, label, 130, 15, '#f3ead2', 0);
-    this.createFittedText(x - width / 2 + 16, y + 10, effect, 146, 12, '#aeb89b', 0);
-    this.createFittedText(x + 44, y, level, 86, 14, maxed ? '#88c56b' : '#d8d3b4');
+      .setInteractive({ useHandCursor: !maxed }),
+    );
+    track(this.add.rectangle(x - width / 2 + 3, y, 4, 30, maxed ? TERMINAL_UI.strokeDim : affordable ? TERMINAL_UI.success : TERMINAL_UI.danger, maxed ? 0.65 : 0.95));
+    track(this.createFittedText(x - width / 2 + 16, y - 8, label, 130, 15, '#f3ead2', 0));
+    track(this.createFittedText(x - width / 2 + 16, y + 10, effect, 146, 12, '#aeb89b', 0));
+    track(this.createFittedText(x + 44, y, level, 86, 14, maxed ? '#88c56b' : '#d8d3b4'));
 
     const chipX = x + width / 2 - 44;
     const chipColor = maxed ? 0x303a2b : affordable ? 0x4a743c : 0x4d302c;
+    let priceContainer: Phaser.GameObjects.Container | null = null;
     if (maxed) {
-      this.add.rectangle(chipX, y, 72, 30, chipColor, 1).setStrokeStyle(1, TERMINAL_UI.strokeDim, 0.9);
-      this.createFittedText(chipX, y, cost, 58, 15, '#f3ead2');
+      track(this.add.rectangle(chipX, y, 72, 30, chipColor, 1).setStrokeStyle(1, TERMINAL_UI.strokeDim, 0.9));
+      track(this.createFittedText(chipX, y, cost, 58, 15, '#f3ead2'));
     } else {
       const price = createCurrencyValue(this, chipX, y, cost, 'soft', { maxWidth: 82, fontSize: 15, iconSize: 22, gap: 5 });
       const chipWidth = price.container.width + 20;
-      this.add.rectangle(chipX, y, chipWidth, 30, chipColor, 1).setStrokeStyle(1, affordable ? TERMINAL_UI.success : TERMINAL_UI.danger, 0.9);
-      this.children.bringToTop(price.container);
+      priceContainer = price.container;
+      track(this.add.rectangle(chipX, y, chipWidth, 30, chipColor, 1).setStrokeStyle(1, affordable ? TERMINAL_UI.success : TERMINAL_UI.danger, 0.9));
+      track(price.container);
     }
 
     if (!maxed) {
@@ -875,6 +1504,14 @@ export class GameScene extends Phaser.Scene {
       row.on('pointerover', () => row.setStrokeStyle(2, TERMINAL_UI.accent, 1));
       row.on('pointerout', () => row.setStrokeStyle(2, affordable ? TERMINAL_UI.stroke : 0x5b3530, 0.95));
     }
+
+    if (parent) {
+      parent.add(created);
+      if (priceContainer) parent.bringToTop(priceContainer);
+      return;
+    }
+
+    if (priceContainer) this.children.bringToTop(priceContainer);
   }
 
   private drawArmoryBackground(width: number, height: number): void {
@@ -892,12 +1529,13 @@ export class GameScene extends Phaser.Scene {
   }
 
   private drawMountedWeapons(): void {
-    this.state.placedWeapons.forEach((placement, index) => {
-      const spacing = 72;
-      const x = this.scale.width / 2 + (index - (this.state.equippedWeaponIds.length - 1) / 2) * spacing;
-      this.drawWeaponIcon(x, this.scale.height - 92, placement.weaponId, 52, 52, placement.rotation).setDepth(12);
+    this.state.placedWeapons.forEach((placement) => {
+      const mount = getBunkerWeaponMount(placement, { cols: this.state.gridCols, rows: this.state.gridRows }, { width: this.scale.width, height: this.scale.height });
+      const x = mount.x;
+      const y = mount.y;
+      this.drawWeaponIcon(x, y, placement.weaponId, 52, 52, placement.rotation).setDepth(12);
       this.add
-        .text(x + 18, this.scale.height - 72, `${getWeaponTotalLevel(this.state.getWeaponProgress(placement.weaponId))}`, {
+        .text(x + 18, y + 20, `${getWeaponTotalLevel(this.state.getWeaponProgress(placement.weaponId))}`, {
           fontFamily: 'Arial, sans-serif',
           fontSize: '14px',
           color: '#fff4cf',
@@ -916,30 +1554,44 @@ export class GameScene extends Phaser.Scene {
     maxWidth: number,
     maxHeight: number,
     rotation: WeaponRotation = 0,
+    tuning: WeaponIconVisualTuning = {},
   ): Phaser.GameObjects.Container {
     const container = this.add.container(x, y);
-    const image = this.add.image(0, 0, AssetKeys.Weapons[weaponId]);
+    const image = this.add.image(0, tuning.offsetY ?? 0, AssetKeys.Weapons[weaponId]);
     const rotationRadians = rotation * (Math.PI / 2);
     const rotated = rotation % 2 === 1;
     const width = rotated ? image.height : image.width;
     const height = rotated ? image.width : image.height;
-    const uiScaleBoost = weaponId === 'tesla' ? 1.2 : 1;
+    const uiScaleBoost = (weaponId === 'tesla' ? 1.2 : 1) * (tuning.scaleBoost ?? 1);
+    image.setFlipX(this.shouldFlipWeaponIconRight(weaponId));
     image.setScale(Math.min(1, maxWidth / width, maxHeight / height) * uiScaleBoost).setRotation(rotationRadians);
     container.add(image);
     return container;
+  }
+
+  private shouldFlipWeaponIconRight(weaponId: WeaponId): boolean {
+    return weaponId === 'sniperRifle' || weaponId === 'tesla';
+  }
+
+  private getGridWeaponIconTuning(weaponId: WeaponId): WeaponIconVisualTuning {
+    if (weaponId === 'sniperRifle') return { scaleBoost: 2 };
+    if (weaponId === 'assaultRifle') return { offsetY: -12 };
+    return {};
   }
 
   private getGridIconBounds(weaponId: WeaponId, rotation: WeaponRotation): { width: number; height: number } {
     const shape = getWeaponShape(weaponId, rotation);
     const cols = Math.max(...shape.map((cell) => cell.col)) + 1;
     const rows = Math.max(...shape.map((cell) => cell.row)) + 1;
-    const slotSize = this.gridMetrics?.slotSize ?? 58;
+    const slotWidth = this.gridMetrics?.slotWidth ?? 58;
+    const slotHeight = this.gridMetrics?.slotHeight ?? 58;
     const gap = this.gridMetrics?.gap ?? 6;
-    const padding = 8;
+    const paddingX = Math.max(2, Math.round(slotWidth * 0.14));
+    const paddingY = Math.max(2, Math.round(slotHeight * 0.14));
 
     return {
-      width: cols * slotSize + (cols - 1) * gap - padding * 2,
-      height: rows * slotSize + (rows - 1) * gap - padding * 2,
+      width: cols * slotWidth + (cols - 1) * gap - paddingX * 2,
+      height: rows * slotHeight + (rows - 1) * gap - paddingY * 2,
     };
   }
 
@@ -963,10 +1615,11 @@ export class GameScene extends Phaser.Scene {
     preview.setDepth(1000).setAlpha(0.86);
 
     const highlights = getWeaponShape(weaponId, rotation).map(() =>
-      this.add.rectangle(0, 0, this.gridMetrics?.slotSize ?? 58, this.gridMetrics?.slotSize ?? 58, 0x39e75f, 0.5).setDepth(900),
+      this.add.rectangle(0, 0, this.gridMetrics?.slotWidth ?? 58, this.gridMetrics?.slotHeight ?? 58, 0x39e75f, 0.5).setDepth(900),
     );
 
     this.dragState = { weaponId, fromPlacement: removed, fromOfferIndex, grabOffset, rotation, preview, highlights };
+    if (removed) this.showSellDropZone(removed);
     this.updateDragPreview(x, y);
     this.updateDragHighlight(x, y);
     this.input.on('pointermove', this.handleDragMove, this);
@@ -1053,6 +1706,17 @@ export class GameScene extends Phaser.Scene {
     this.showPrep();
   }
 
+  private handleWheel(pointer: Phaser.Input.Pointer, _gameObjects: Phaser.GameObjects.GameObject[], _deltaX: number, deltaY: number): void {
+    if (this.activeTab !== 'upgrades' || this.activeUpgradesSubTab !== 'weapons') return;
+    if (this.weaponUpgradeScrollMax <= 0 || !this.weaponUpgradeScrollBounds) return;
+    if (!Phaser.Geom.Rectangle.Contains(this.weaponUpgradeScrollBounds, pointer.x, pointer.y)) return;
+
+    const nextScrollY = Phaser.Math.Clamp(this.weaponUpgradeScrollY + deltaY * 0.45, 0, this.weaponUpgradeScrollMax);
+    if (Math.abs(nextScrollY - this.weaponUpgradeScrollY) < 0.5) return;
+    this.weaponUpgradeScrollY = nextScrollY;
+    this.showPrep();
+  }
+
   private rotateDraggedWeapon(pointerX: number, pointerY: number): void {
     if (!this.dragState) return;
 
@@ -1068,7 +1732,7 @@ export class GameScene extends Phaser.Scene {
     drag.preview = this.drawWeaponIcon(pointerX, pointerY, drag.weaponId, iconBounds.width, iconBounds.height, drag.rotation);
     drag.preview.setDepth(1000).setAlpha(0.86);
     drag.highlights = getWeaponShape(drag.weaponId, drag.rotation).map(() =>
-      this.add.rectangle(0, 0, this.gridMetrics?.slotSize ?? 58, this.gridMetrics?.slotSize ?? 58, 0x39e75f, 0.5).setDepth(900),
+      this.add.rectangle(0, 0, this.gridMetrics?.slotWidth ?? 58, this.gridMetrics?.slotHeight ?? 58, 0x39e75f, 0.5).setDepth(900),
     );
 
     this.updateDragPreview(pointerX, pointerY);
@@ -1080,6 +1744,16 @@ export class GameScene extends Phaser.Scene {
     if (pointer.rightButtonReleased()) return;
 
     const drag = this.dragState;
+
+    if (drag.fromPlacement && this.isPointerOverSellDropZone(pointer.x, pointer.y)) {
+      const refund = this.getWeaponSellValue(drag.fromPlacement.weaponId);
+      this.state.soft += refund;
+      this.selectedPlacementId = null;
+      this.clearDragState(false);
+      this.showPrep();
+      this.flashHint(`Продано +${refund}`);
+      return;
+    }
 
     const cell = this.pointerToPlacementCell(pointer.x, pointer.y);
     const placed = cell
@@ -1117,6 +1791,12 @@ export class GameScene extends Phaser.Scene {
   private updateDragHighlight(pointerX: number, pointerY: number): void {
     if (!this.dragState || !this.gridMetrics) return;
 
+    this.updateSellDropZone(pointerX, pointerY);
+    if (this.dragState.fromPlacement && this.isPointerOverSellDropZone(pointerX, pointerY)) {
+      for (const highlight of this.dragState.highlights) highlight.setVisible(false);
+      return;
+    }
+
     const cell = this.pointerToPlacementCell(pointerX, pointerY);
     const shape = getWeaponShape(this.dragState.weaponId, this.dragState.rotation);
     const valid = cell ? this.state.canPlaceWeapon(this.dragState.weaponId, cell.col, cell.row, this.dragState.rotation) : false;
@@ -1131,8 +1811,8 @@ export class GameScene extends Phaser.Scene {
 
       const col = cell.col + shapeCell.col;
       const row = cell.row + shapeCell.row;
-      const x = this.gridMetrics!.startX + col * this.gridMetrics!.pitch + this.gridMetrics!.slotSize / 2;
-      const y = this.gridMetrics!.startY + row * this.gridMetrics!.pitch + this.gridMetrics!.slotSize / 2;
+      const x = this.gridMetrics!.startX + col * this.gridMetrics!.pitchX + this.gridMetrics!.slotWidth / 2;
+      const y = this.gridMetrics!.startY + row * this.gridMetrics!.pitchY + this.gridMetrics!.slotHeight / 2;
 
       highlight.setVisible(true).setPosition(x, y).setFillStyle(color, this.state.isCellActive(col, row) ? 0.58 : 0.35);
       highlight.setStrokeStyle(3, color, 0.95);
@@ -1141,8 +1821,8 @@ export class GameScene extends Phaser.Scene {
 
   private pointerToGridCell(pointerX: number, pointerY: number): { col: number; row: number } | null {
     if (!this.gridMetrics) return null;
-    const col = Math.floor((pointerX - this.gridMetrics.startX) / this.gridMetrics.pitch);
-    const row = Math.floor((pointerY - this.gridMetrics.startY) / this.gridMetrics.pitch);
+    const col = Math.floor((pointerX - this.gridMetrics.startX) / this.gridMetrics.pitchX);
+    const row = Math.floor((pointerY - this.gridMetrics.startY) / this.gridMetrics.pitchY);
     if (col < 0 || row < 0 || col >= this.gridMetrics.cols || row >= this.gridMetrics.rows) return null;
     return { col, row };
   }
@@ -1261,9 +1941,71 @@ export class GameScene extends Phaser.Scene {
     const maxRow = Math.max(...shape.map((cell) => cell.row));
 
     this.dragState.preview.setPosition(
-      pointerX + (maxCol / 2 - this.dragState.grabOffset.col) * this.gridMetrics.pitch,
-      pointerY + (maxRow / 2 - this.dragState.grabOffset.row) * this.gridMetrics.pitch,
+      pointerX + (maxCol / 2 - this.dragState.grabOffset.col) * this.gridMetrics.pitchX,
+      pointerY + (maxRow / 2 - this.dragState.grabOffset.row) * this.gridMetrics.pitchY,
     );
+  }
+
+  private showSellDropZone(placement: PlacedWeapon): void {
+    this.destroySellDropZone();
+
+    const content = this.getPanelContentBounds(this.getLeftPanel());
+    const width = 194;
+    const height = 54;
+    const x = content.left + width / 2;
+    const y = content.bottom - height / 2;
+    const refund = this.getWeaponSellValue(placement.weaponId);
+    const bounds = new Phaser.Geom.Rectangle(x - width / 2, y - height / 2, width, height);
+
+    const container = this.add.container(x, y).setDepth(950);
+    const bg = this.add.rectangle(0, 0, width, height, 0x4d302c, 1).setStrokeStyle(3, 0xc44531, 0.95);
+    const title = this.add
+      .text(-width / 2 + 48, -8, 'Продать', {
+        fontFamily: 'Trebuchet MS, Arial, sans-serif',
+        fontSize: '19px',
+        color: '#f3ead2',
+        stroke: '#050805',
+        strokeThickness: 3,
+      })
+      .setOrigin(0, 0.5);
+    const icon = this.add.rectangle(-width / 2 + 24, 0, 24, 28, 0x1a0d0b, 1).setStrokeStyle(2, 0xd58c7e, 0.92);
+    const shine = this.add.rectangle(0, -height / 2 + 5, width - 12, 2, 0xf1d37a, 0.3);
+    const refundView = createCurrencyValue(this, width / 2 - 84, 13, refund, 'soft', {
+      maxWidth: 72,
+      fontSize: 15,
+      iconSize: 19,
+      gap: 4,
+      color: '#f3ead2',
+      originX: 0,
+      depth: 951,
+    });
+
+    container.add([bg, shine, icon, title, refundView.container]);
+    this.sellDropZone = { container, bg, title, bounds };
+  }
+
+  private updateSellDropZone(pointerX: number, pointerY: number): void {
+    if (!this.sellDropZone) return;
+
+    const active = this.isPointerOverSellDropZone(pointerX, pointerY);
+    this.sellDropZone.bg
+      .setFillStyle(active ? 0x6b322b : 0x4d302c, 1)
+      .setStrokeStyle(active ? 4 : 3, active ? 0xf1d37a : 0xc44531, active ? 1 : 0.95);
+    this.sellDropZone.title.setColor(active ? '#fff0a8' : '#f3ead2');
+    this.sellDropZone.container.setScale(active ? 1.04 : 1);
+  }
+
+  private isPointerOverSellDropZone(pointerX: number, pointerY: number): boolean {
+    return this.sellDropZone ? Phaser.Geom.Rectangle.Contains(this.sellDropZone.bounds, pointerX, pointerY) : false;
+  }
+
+  private destroySellDropZone(): void {
+    this.sellDropZone?.container.destroy(true);
+    this.sellDropZone = null;
+  }
+
+  private getWeaponSellValue(weaponId: WeaponId): number {
+    return Math.floor(WEAPONS[weaponId].softCost * 0.5);
   }
 
   private clearDragState(removeListeners: boolean): void {
@@ -1276,6 +2018,7 @@ export class GameScene extends Phaser.Scene {
     if (!this.dragState) return;
     this.dragState.preview.destroy();
     for (const highlight of this.dragState.highlights) highlight.destroy();
+    this.destroySellDropZone();
     this.dragState = null;
     this.input.off('pointermove', this.handleDragMove, this);
     this.input.off('pointerup', this.handleDragEnd, this);
@@ -1437,11 +2180,26 @@ export class GameScene extends Phaser.Scene {
     this.flashHint(bought ? UI_TEXT.messages.upgradeBought : UI_TEXT.messages.upgradeUnavailable);
   }
 
-  private applyCheat(kind: 'soft' | 'stage' | 'base'): void {
+  private applyCheat(kind: 'soft' | 'million' | 'cells10' | 'stage' | 'base'): void {
     if (kind === 'soft') {
       this.state.soft += 1000;
       this.showPrep();
       this.flashHint(UI_TEXT.cheats.soft);
+      return;
+    }
+
+    if (kind === 'million') {
+      this.state.soft += 1_000_000;
+      this.state.hard += 1_000_000;
+      this.showPrep();
+      this.flashHint('+1M soft + hard');
+      return;
+    }
+
+    if (kind === 'cells10') {
+      const added = this.state.cheatAddGridCells(10);
+      this.showPrep();
+      this.flashHint(`+${added} cells`);
       return;
     }
 
@@ -1458,10 +2216,82 @@ export class GameScene extends Phaser.Scene {
     this.flashHint(UI_TEXT.cheats.base);
   }
 
+  private spawnCheatEnemies(): void {
+    const battleScene = this.scene.get(SceneKeys.Battle) as Phaser.Scene & { spawnOneOfEachEnemyType: () => number };
+    if (battleScene.spawnOneOfEachEnemyType() === 0) return;
+    this.flashHint(UI_TEXT.cheats.spawnedEachType);
+  }
+
+  private equipEveryWeaponCheat(): void {
+    const placedCount = this.state.cheatEquipEveryWeapon();
+    this.selectedPlacementId = null;
+    this.selectedWeapon = this.state.unlockedWeaponPool[0] ?? null;
+    this.selectedRotation = 0;
+    this.showPrep();
+    this.flashHint(`${UI_TEXT.cheats.equippedEveryWeapon}: ${placedCount}`);
+  }
+
   private adjustRoadBound(side: 'left' | 'right', delta: number): void {
     moveRoadBound(side, delta);
     DEBUG_FLAGS.showRoadBounds = true;
     this.showPrep();
+  }
+
+  private selectCheatEnemy(direction: number): void {
+    const optionCount = ENEMIES.length + 1;
+    this.selectedCheatEnemyIndex = (this.selectedCheatEnemyIndex + direction + optionCount) % optionCount;
+    this.showPrep();
+  }
+
+  private getSelectedCheatEnemyId(): EnemyId | null {
+    return this.selectedCheatEnemyIndex === 0 ? null : ENEMIES[this.selectedCheatEnemyIndex - 1]?.id ?? null;
+  }
+
+  private getEnemyCheatLabel(enemyId: EnemyId): string {
+    return ENEMIES.find((enemy) => enemy.id === enemyId)?.name ?? enemyId;
+  }
+
+  private drawCheatEnemyPreview(enemyId: EnemyId, x: number, y: number, displaySize: number): void {
+    const frameKey = EnemyFrameKeys[enemyId].walk[0];
+    const previewSize = Math.min(displaySize, 92);
+    this.add.sprite(x, y, frameKey).setDepth(82).setOrigin(0.5).setDisplaySize(previewSize, previewSize);
+  }
+
+  private adjustEnemyScale(delta: number): void {
+    const enemyId = this.getSelectedCheatEnemyId();
+    const settings = loadGameSettings();
+    const currentScale = enemyId ? settings.enemyScales[enemyId] ?? settings.enemyScale : settings.enemyScale;
+    const nextSettings = this.updateSelectedEnemyScale(currentScale + delta);
+    const nextScale = enemyId ? nextSettings.enemyScales[enemyId] ?? nextSettings.enemyScale : nextSettings.enemyScale;
+    this.showPrep();
+    this.flashHint(`${this.getSelectedEnemyScaleLabel()}: ${Math.round(nextScale * 100)}%`);
+  }
+
+  private resetEnemyScale(): void {
+    const defaultScale = getDefaultEnemyScale(this.getSelectedCheatEnemyId() ?? undefined);
+    this.updateSelectedEnemyScale(defaultScale);
+    this.showPrep();
+    this.flashHint(`${this.getSelectedEnemyScaleLabel()}: ${Math.round(defaultScale * 100)}%`);
+  }
+
+  private updateSelectedEnemyScale(value: number): GameSettings {
+    const enemyId = this.getSelectedCheatEnemyId();
+    const settings = loadGameSettings();
+    if (!enemyId) {
+      return updateGameSettings({ enemyScale: value });
+    }
+
+    return updateGameSettings({
+      enemyScales: {
+        ...settings.enemyScales,
+        [enemyId]: value,
+      },
+    });
+  }
+
+  private getSelectedEnemyScaleLabel(): string {
+    const enemyId = this.getSelectedCheatEnemyId();
+    return enemyId ? this.getEnemyCheatLabel(enemyId) : UI_TEXT.cheats.allEnemies;
   }
 
   private flashHint(message: string): void {

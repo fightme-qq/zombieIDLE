@@ -29,6 +29,7 @@ export type GridProgress = GridSize & {
 
 export const DEFAULT_GRID_GROWTH_CONFIG: GridGrowthConfig = IDLE_GRID_CONFIG;
 export const DEFAULT_REWARD_CONFIG: RewardConfig = IDLE_REWARD_CONFIG;
+const ROW_EXPAND_ASPECT_THRESHOLD = 1.5;
 
 export function getStartCellCount(config: GridGrowthConfig = DEFAULT_GRID_GROWTH_CONFIG): number {
   return config.startCols * config.startRows;
@@ -82,18 +83,16 @@ export function getNextCellPurchase(activeCells: number, config: GridGrowthConfi
 export function getGridSizeForActiveCells(activeCells: number, config: GridGrowthConfig = DEFAULT_GRID_GROWTH_CONFIG): GridSize {
   assertValidActiveCells(activeCells, config);
 
-  if (activeCells === getStartCellCount(config)) {
-    return { cols: config.startCols, rows: config.startRows };
+  let cols = config.startCols;
+  let rows = config.startRows;
+
+  while (cols * rows < activeCells) {
+    if (shouldExpandGridRows(cols, rows, config)) {
+      rows += 1;
+    } else {
+      cols += 1;
+    }
   }
-
-  const targetAspect = 1.6;
-  let cols = Math.ceil(Math.sqrt(activeCells * targetAspect));
-  cols = PhaserMathClamp(cols, config.startCols, config.maxCols);
-  let rows = Math.ceil(activeCells / cols);
-  rows = PhaserMathClamp(rows, config.startRows, config.maxRows);
-
-  while (cols * rows < activeCells && cols < config.maxCols) cols += 1;
-  while (cols * rows < activeCells && rows < config.maxRows) rows += 1;
 
   return { cols, rows };
 }
@@ -114,6 +113,9 @@ function assertValidActiveCells(activeCells: number, config: GridGrowthConfig): 
   }
 }
 
-function PhaserMathClamp(value: number, min: number, max: number): number {
-  return Math.max(min, Math.min(max, value));
+function shouldExpandGridRows(cols: number, rows: number, config: GridGrowthConfig): boolean {
+  if (rows >= config.maxRows) return false;
+  if (cols >= config.maxCols) return true;
+
+  return cols / rows > ROW_EXPAND_ASPECT_THRESHOLD;
 }

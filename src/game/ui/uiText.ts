@@ -12,6 +12,7 @@ type UiTextTable = {
     soft: string;
     hard: string;
     kills: string;
+    bossKills: string;
     base: string;
     mounted: string;
     dps: string;
@@ -20,6 +21,7 @@ type UiTextTable = {
     rateShort: string;
     shotsShort: string;
     speedShort: string;
+    rangeShort: string;
   };
   fight: {
     autoRunning: string;
@@ -29,6 +31,7 @@ type UiTextTable = {
     dragToGrid: string;
     needMoreSoft: string;
     dragHint: string;
+    rotateHint: string;
   };
   shop: {
     rollSet: string;
@@ -37,6 +40,9 @@ type UiTextTable = {
   };
   upgrades: {
     baseTitle: string;
+    weaponsTitle: string;
+    armor: string;
+    armorEffect: (level: number) => string;
     durability: string;
     cell: string;
     rareRoll: string;
@@ -57,6 +63,8 @@ type UiTextTable = {
     language: string;
     currentLanguage: string;
     switchLanguage: string;
+    sfxVolume: string;
+    musicVolume: string;
     devTools: string;
   };
   cheats: {
@@ -69,15 +77,25 @@ type UiTextTable = {
     rightShort: string;
     boundLeft: string;
     boundRight: string;
+    enemyType: string;
+    allEnemies: string;
+    enemyScale: string;
+    enemyScaleReset: string;
+    spawnEachType: string;
+    spawnedEachType: string;
+    equipEveryWeapon: string;
+    equippedEveryWeapon: string;
     soft: string;
     stage: string;
     base: string;
   };
   buttons: {
     settings: string;
+    addGridCell: string;
   };
   messages: {
     notEnoughSoft: string;
+    notEnoughHard: string;
     weaponNoFit: string;
     upgradeBought: string;
     upgradeUnavailable: string;
@@ -107,6 +125,7 @@ const TEXT_TABLES: Record<LocaleId, UiTextTable> = {
       soft: 'Крышки',
       hard: 'Жетоны',
       kills: 'Убито',
+      bossKills: 'Боссы',
       base: 'База',
       mounted: 'Оружие',
       dps: 'DPS',
@@ -115,6 +134,7 @@ const TEXT_TABLES: Record<LocaleId, UiTextTable> = {
       rateShort: 'СКР',
       shotsShort: 'ВЫСТ',
       speedShort: 'СКОР',
+      rangeShort: 'ДАЛЬ',
     },
     fight: {
       autoRunning: 'Автобой идет',
@@ -124,6 +144,7 @@ const TEXT_TABLES: Record<LocaleId, UiTextTable> = {
       dragToGrid: 'Перетащи на сетку',
       needMoreSoft: 'Не хватает крышек',
       dragHint: 'Перетащи оружие на сетку',
+      rotateHint: 'Поворот: удерживай оружие и нажми правую кнопку мыши',
     },
     shop: {
       rollSet: 'Поставка',
@@ -132,6 +153,9 @@ const TEXT_TABLES: Record<LocaleId, UiTextTable> = {
     },
     upgrades: {
       baseTitle: 'База',
+      weaponsTitle: 'Оружие',
+      armor: 'Броня',
+      armorEffect: (level) => `-${level} урона от зомби`,
       durability: 'Прочность',
       cell: 'Клетка',
       rareRoll: 'Качество',
@@ -147,6 +171,8 @@ const TEXT_TABLES: Record<LocaleId, UiTextTable> = {
         damage: (level) => `+${level * 16}% урона`,
         fireRate: (level) => `+${level * 5.5}% темпа`,
         handling: (level) => `+${level * 7.5}% скорости`,
+        range: (level) => `+${level * 12}% дальности`,
+        critChance: (level) => `+${level * 3}% крита`,
         special: (level) => (level === 0 ? 'базовый эффект' : `+${Math.floor((level + 1) / 2)} выстр.`),
       },
     },
@@ -161,6 +187,8 @@ const TEXT_TABLES: Record<LocaleId, UiTextTable> = {
       damage: 'Урон',
       fireRate: 'Скорострельность',
       handling: 'Управляемость',
+      range: 'Дальность',
+      critChance: 'Шанс крита',
       special: 'Особенность',
     },
     settings: {
@@ -168,6 +196,8 @@ const TEXT_TABLES: Record<LocaleId, UiTextTable> = {
       language: 'Язык',
       currentLanguage: 'Русский',
       switchLanguage: 'English',
+      sfxVolume: 'Звуки',
+      musicVolume: 'Музыка',
       devTools: 'Отладка',
     },
     cheats: {
@@ -180,15 +210,25 @@ const TEXT_TABLES: Record<LocaleId, UiTextTable> = {
       rightShort: 'П',
       boundLeft: 'Левая',
       boundRight: 'Правая',
+      enemyType: 'Тип зомби',
+      allEnemies: 'Все зомби',
+      enemyScale: 'Размер зомби',
+      enemyScaleReset: 'Сброс размера',
+      spawnEachType: 'По 1 каждого типа',
+      spawnedEachType: 'Выпущено по одному зомби каждого типа',
+      equipEveryWeapon: 'Equip every weapon',
+      equippedEveryWeapon: 'Every weapon equipped',
       soft: '+1000',
       stage: '+5 этапов',
       base: '+100 база',
     },
     buttons: {
       settings: 'Настройки',
+      addGridCell: '+1 ячейка',
     },
     messages: {
       notEnoughSoft: 'Не хватает крышек',
+      notEnoughHard: '?? ??????? ???????',
       weaponNoFit: 'Оружие не помещается',
       upgradeBought: 'Улучшение куплено',
       upgradeUnavailable: 'Не хватает крышек или максимум',
@@ -214,6 +254,7 @@ const TEXT_TABLES: Record<LocaleId, UiTextTable> = {
       soft: 'Caps',
       hard: 'Tokens',
       kills: 'Kills',
+      bossKills: 'Bosses',
       base: 'Base',
       mounted: 'Mounted',
       dps: 'DPS',
@@ -222,6 +263,7 @@ const TEXT_TABLES: Record<LocaleId, UiTextTable> = {
       rateShort: 'RATE',
       shotsShort: 'SHOTS',
       speedShort: 'SPD',
+      rangeShort: 'RNG',
     },
     fight: {
       autoRunning: 'Auto fight running',
@@ -231,6 +273,7 @@ const TEXT_TABLES: Record<LocaleId, UiTextTable> = {
       dragToGrid: 'Drag to grid',
       needMoreSoft: 'Need more caps',
       dragHint: 'Drag a weapon onto the grid',
+      rotateHint: 'Rotate: hold the weapon and press the right mouse button',
     },
     shop: {
       rollSet: 'Supply roll',
@@ -239,6 +282,9 @@ const TEXT_TABLES: Record<LocaleId, UiTextTable> = {
     },
     upgrades: {
       baseTitle: 'Base',
+      weaponsTitle: 'Weapons',
+      armor: 'Armor',
+      armorEffect: (level) => `-${level} zombie damage`,
       durability: 'Durability',
       cell: 'Grid Cell',
       rareRoll: 'Quality',
@@ -254,6 +300,8 @@ const TEXT_TABLES: Record<LocaleId, UiTextTable> = {
         damage: (level) => `+${level * 16}% damage`,
         fireRate: (level) => `+${level * 5.5}% rate`,
         handling: (level) => `+${level * 7.5}% speed`,
+        range: (level) => `+${level * 12}% range`,
+        critChance: (level) => `+${level * 3}% crit`,
         special: (level) => (level === 0 ? 'base trait' : `+${Math.floor((level + 1) / 2)} shots`),
       },
     },
@@ -268,6 +316,8 @@ const TEXT_TABLES: Record<LocaleId, UiTextTable> = {
       damage: 'Damage',
       fireRate: 'Fire Rate',
       handling: 'Handling',
+      range: 'Range',
+      critChance: 'Crit Chance',
       special: 'Special',
     },
     settings: {
@@ -275,6 +325,8 @@ const TEXT_TABLES: Record<LocaleId, UiTextTable> = {
       language: 'Language',
       currentLanguage: 'English',
       switchLanguage: 'Русский',
+      sfxVolume: 'SFX',
+      musicVolume: 'Music',
       devTools: 'Dev Tools',
     },
     cheats: {
@@ -287,15 +339,25 @@ const TEXT_TABLES: Record<LocaleId, UiTextTable> = {
       rightShort: 'R',
       boundLeft: 'Left',
       boundRight: 'Right',
+      enemyType: 'Enemy Type',
+      allEnemies: 'All Zombies',
+      enemyScale: 'Zombie Size',
+      enemyScaleReset: 'Reset Size',
+      spawnEachType: 'Spawn 1 of each type',
+      spawnedEachType: 'Spawned one zombie of every type',
+      equipEveryWeapon: 'Equip every weapon',
+      equippedEveryWeapon: 'Every weapon equipped',
       soft: '+1000',
       stage: '+5 Stage',
       base: '+100 Base',
     },
     buttons: {
       settings: 'Settings',
+      addGridCell: '+1 Cell',
     },
     messages: {
       notEnoughSoft: 'Not enough caps',
+      notEnoughHard: 'Not enough tokens',
       weaponNoFit: 'Weapon does not fit there',
       upgradeBought: 'Upgrade bought',
       upgradeUnavailable: 'Not enough caps or maxed out',
