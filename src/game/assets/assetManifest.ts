@@ -39,6 +39,11 @@ export const AssetKeys = {
     Effects: {
       grenadeExplosion: 'audio-effect-grenade-explosion',
     },
+    Music: {
+      carnivalOfNightmares: 'audio-music-carnival-of-nightmares',
+      dreadfulApparition: 'audio-music-dreadful-apparition',
+      echoesOfTheAbyss: 'audio-music-echoes-of-the-abyss',
+    },
   },
 } as const;
 
@@ -171,6 +176,9 @@ export const audioAssets: AudioAsset[] = [
   { key: AssetKeys.Audio.Weapons.grenadeLauncherShot, urls: ['assets/audio/weapon-grenade-launcher-shot.mp3'] },
   { key: AssetKeys.Audio.Weapons.teslaShot, urls: ['assets/audio/weapon-tesla-shot.mp3'] },
   { key: AssetKeys.Audio.Effects.grenadeExplosion, urls: ['assets/audio/effect-grenade-explosion.mp3'] },
+  { key: AssetKeys.Audio.Music.carnivalOfNightmares, urls: ['assets/audio/carnival-of-nightmares_87951.mp3'] },
+  { key: AssetKeys.Audio.Music.dreadfulApparition, urls: ['assets/audio/dreadful-apparition_87916.mp3'] },
+  { key: AssetKeys.Audio.Music.echoesOfTheAbyss, urls: ['assets/audio/echoes-of-the-abyss_87954.mp3'] },
 ];
 
 export function loadAssetManifest(scene: Phaser.Scene): void {

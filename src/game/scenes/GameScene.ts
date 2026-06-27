@@ -1,8 +1,10 @@
 import Phaser from 'phaser';
+import { applyMusicVolume } from '../audio/GameAudio';
 import { AssetKeys, EnemyFrameKeys } from '../assets/assetManifest';
 import { DEBUG_FLAGS } from '../config/debugFlags';
 import { moveRoadBound, ROAD_BOUNDS, ROAD_BOUNDS_LIMITS } from '../config/roadBounds';
 import { SceneKeys } from '../config/sceneKeys';
+import { DEFAULT_WEAPON_GRID_ICON_TUNING, WEAPON_GRID_ICON_TUNING, type WeaponIconRotation, type WeaponIconVisualTuning } from '../config/weaponIconTuning';
 import { ENEMIES, type EnemyId } from '../data/enemyData';
 import {
   WEAPON_CATEGORIES,
@@ -91,11 +93,7 @@ type PanelContentBounds = {
 
 type SidePanelSide = 'left' | 'right';
 type VolumeSettingId = 'musicVolume' | 'sfxVolume';
-
-type WeaponIconVisualTuning = {
-  scaleBoost?: number;
-  offsetY?: number;
-};
+type WeaponIconTuningKey = keyof WeaponIconVisualTuning;
 
 const PREP_TABS: PrepTab[] = ['fight', 'equip', 'upgrades', 'shop'];
 const SIDE_PANEL_WIDTH = 430;
@@ -137,6 +135,8 @@ export class GameScene extends Phaser.Scene {
   private selectedPlacementId: number | null = null;
   private cheatsOpen = false;
   private selectedCheatEnemyIndex = 0;
+  private selectedCheatWeaponIndex = 0;
+  private selectedCheatWeaponRotation: WeaponIconRotation = 0;
   private settingsOpen = false;
   private settingsPanel: Phaser.GameObjects.Container | null = null;
   private sellDropZone: SellDropZone | null = null;
@@ -959,20 +959,6 @@ export class GameScene extends Phaser.Scene {
             );
             return;
           }
-
-          if (!this.selectedWeapon) return;
-          if (!this.canBuySelectedOffer()) {
-            this.flashHint(UI_TEXT.messages.notEnoughSoft);
-            return;
-          }
-          if (!this.state.buyAndPlaceWeapon(this.selectedWeapon, col, row, this.selectedRotation)) {
-            this.showPrep();
-            this.flashHint(UI_TEXT.messages.weaponNoFit);
-            return;
-          }
-
-          this.consumeSelectedOffer();
-          this.showPrep();
         });
       }
     }
@@ -984,7 +970,15 @@ export class GameScene extends Phaser.Scene {
       const x = startX + (placement.col + (maxCol + 1) / 2) * pitchX - gap / 2;
       const y = gridStartY + (placement.row + (maxRow + 1) / 2) * pitchY - gap / 2;
       const iconBounds = this.getGridIconBounds(placement.weaponId, placement.rotation);
-      const icon = this.drawWeaponIcon(x, y, placement.weaponId, iconBounds.width, iconBounds.height, placement.rotation, this.getGridWeaponIconTuning(placement.weaponId));
+      const icon = this.drawWeaponIcon(
+        x,
+        y,
+        placement.weaponId,
+        iconBounds.width,
+        iconBounds.height,
+        placement.rotation,
+        this.getGridWeaponIconTuning(placement.weaponId),
+      );
       const hitWidth = (maxCol + 1) * pitchX;
       const hitHeight = (maxRow + 1) * pitchY;
       if (placement.id === this.selectedPlacementId) {
@@ -1182,6 +1176,7 @@ export class GameScene extends Phaser.Scene {
 
     if (this.cheatsOpen) {
       this.drawCheatsPanel();
+      this.drawWeaponCheatsPanel();
     }
   }
 
@@ -1290,6 +1285,63 @@ export class GameScene extends Phaser.Scene {
     this.createButton(x, actionTop + 136, panelWidth - 78, 30, UI_TEXT.cheats.base, 0x4a743c, onlyWhenCheatsOpen(() => this.applyCheat('base')), 81);
   }
 
+  private drawWeaponCheatsPanel(): void {
+    const panelWidth = Math.min(354, this.scale.width - 28);
+    const panelHeight = 350;
+    const cheatPanelWidth = Math.min(350, this.scale.width - 28);
+    const targetRight = this.scale.width - cheatPanelWidth - 28;
+    const x = Phaser.Math.Clamp(targetRight - panelWidth / 2 - 10, panelWidth / 2 + 14, this.scale.width - panelWidth / 2 - 14);
+    const y = 104 + panelHeight / 2;
+    const left = x - panelWidth / 2;
+    const right = x + panelWidth / 2;
+    const top = y - panelHeight / 2;
+    const weaponId = this.getSelectedCheatWeaponId();
+    const rotation = this.selectedCheatWeaponRotation;
+    const tuning = this.getWeaponIconTuning(weaponId);
+    const weaponLabel = WEAPONS[weaponId].name || weaponId;
+    const onlyWhenCheatsOpen = (action: () => void): (() => void) => {
+      return () => {
+        if (!this.cheatsOpen) return;
+        action();
+      };
+    };
+
+    this.add.rectangle(x, y, panelWidth, panelHeight, TERMINAL_UI.panelStrong, 0.97).setDepth(80).setStrokeStyle(2, 0x6b4f86, 0.95);
+    this.add.rectangle(x, top + 8, panelWidth - 20, 2, TERMINAL_UI.accent, 0.42).setDepth(81);
+    this.createFittedText(left + 20, top + 30, 'Weapon Icon', 130, 18, '#f3ead2', 0).setDepth(82);
+
+    const selectY = top + 66;
+    this.createFittedText(left + 20, selectY, 'Weapon', 68, 14, '#aeb89b', 0).setDepth(82);
+    this.createButton(left + 102, selectY, 40, 30, '<', 0x2f6062, onlyWhenCheatsOpen(() => this.selectCheatWeapon(-1)), 81);
+    this.createFittedText(x + 16, selectY, weaponLabel, 132, 13, '#f3ead2').setDepth(82);
+    this.createButton(right - 34, selectY, 40, 30, '>', 0x2f6062, onlyWhenCheatsOpen(() => this.selectCheatWeapon(1)), 81);
+
+    const rotationY = top + 98;
+    this.createFittedText(left + 20, rotationY, 'Rotation', 68, 14, '#aeb89b', 0).setDepth(82);
+    this.createButton(left + 102, rotationY, 40, 30, '<', 0x2f6062, onlyWhenCheatsOpen(() => this.selectCheatWeaponRotation(-1)), 81);
+    this.createFittedText(x + 16, rotationY, `${rotation * 90}deg`, 132, 13, '#f3ead2').setDepth(82);
+    this.createButton(right - 34, rotationY, 40, 30, '>', 0x2f6062, onlyWhenCheatsOpen(() => this.selectCheatWeaponRotation(1)), 81);
+
+    this.add.rectangle(x, top + 134, panelWidth - 54, 94, 0x10170f, 0.62).setDepth(81).setStrokeStyle(1, TERMINAL_UI.stroke, 0.6);
+    this.drawCheatWeaponPreview(weaponId, rotation, x, top + 134);
+    this.createFittedText(
+      x,
+      top + 190,
+      `size ${Math.round(tuning.scaleBoost * 100)}%   x ${tuning.offsetX}   y ${tuning.offsetY}`,
+      panelWidth - 58,
+      14,
+      '#d8d3b4',
+    ).setDepth(82);
+
+    const controlsTop = top + 220;
+    this.drawWeaponTuningControl(left, right, controlsTop, 'Size', 'scaleBoost', '-5%', '+5%', 0.05, onlyWhenCheatsOpen);
+    this.drawWeaponTuningControl(left, right, controlsTop + 32, 'X', 'offsetX', '-1', '+1', 1, onlyWhenCheatsOpen);
+    this.drawWeaponTuningControl(left, right, controlsTop + 64, 'Y', 'offsetY', '-1', '+1', 1, onlyWhenCheatsOpen);
+    this.createButton(x, controlsTop + 104, panelWidth - 78, 30, 'Reset weapon icon', 0x4c5f87, onlyWhenCheatsOpen(() => this.resetSelectedWeaponIconTuning()), 81);
+
+    this.exposeWeaponIconTuningForDevTools();
+  }
+
   private drawSettingsPanel(): void {
     const settings = loadGameSettings();
     const panelWidth = Math.min(400, this.scale.width - 28);
@@ -1382,6 +1434,9 @@ export class GameScene extends Phaser.Scene {
 
   private setVolumeSetting(setting: VolumeSettingId, value: number): void {
     updateGameSettings({ [setting]: Math.round(Phaser.Math.Clamp(value, 0, 1) * 10) / 10 });
+    if (setting === 'musicVolume') {
+      applyMusicVolume();
+    }
     this.showPrep();
   }
 
@@ -1557,8 +1612,9 @@ export class GameScene extends Phaser.Scene {
     tuning: WeaponIconVisualTuning = {},
   ): Phaser.GameObjects.Container {
     const container = this.add.container(x, y);
-    const image = this.add.image(0, tuning.offsetY ?? 0, AssetKeys.Weapons[weaponId]);
     const rotationRadians = rotation * (Math.PI / 2);
+    const offset = this.rotateWeaponIconOffset(tuning.offsetX ?? 0, tuning.offsetY ?? 0, rotation);
+    const image = this.add.image(offset.x, offset.y, AssetKeys.Weapons[weaponId]);
     const rotated = rotation % 2 === 1;
     const width = rotated ? image.height : image.width;
     const height = rotated ? image.width : image.height;
@@ -1574,9 +1630,15 @@ export class GameScene extends Phaser.Scene {
   }
 
   private getGridWeaponIconTuning(weaponId: WeaponId): WeaponIconVisualTuning {
-    if (weaponId === 'sniperRifle') return { scaleBoost: 2 };
-    if (weaponId === 'assaultRifle') return { offsetY: -12 };
-    return {};
+    return WEAPON_GRID_ICON_TUNING[weaponId];
+  }
+
+  private rotateWeaponIconOffset(offsetX: number, offsetY: number, rotation: WeaponRotation): { x: number; y: number } {
+    const normalized = this.toWeaponIconRotation(rotation);
+    if (normalized === 1) return { x: -offsetY, y: offsetX };
+    if (normalized === 2) return { x: -offsetX, y: -offsetY };
+    if (normalized === 3) return { x: offsetY, y: -offsetX };
+    return { x: offsetX, y: offsetY };
   }
 
   private getGridIconBounds(weaponId: WeaponId, rotation: WeaponRotation): { width: number; height: number } {
@@ -1611,7 +1673,7 @@ export class GameScene extends Phaser.Scene {
 
     const removed = fromPlacement ? this.state.removeWeaponById(fromPlacement.id) : null;
     const iconBounds = this.getGridIconBounds(weaponId, rotation);
-    const preview = this.drawWeaponIcon(x, y, weaponId, iconBounds.width, iconBounds.height, rotation);
+    const preview = this.drawWeaponIcon(x, y, weaponId, iconBounds.width, iconBounds.height, rotation, this.getGridWeaponIconTuning(weaponId));
     preview.setDepth(1000).setAlpha(0.86);
 
     const highlights = getWeaponShape(weaponId, rotation).map(() =>
@@ -1729,7 +1791,15 @@ export class GameScene extends Phaser.Scene {
     for (const highlight of drag.highlights) highlight.destroy();
 
     const iconBounds = this.getGridIconBounds(drag.weaponId, drag.rotation);
-    drag.preview = this.drawWeaponIcon(pointerX, pointerY, drag.weaponId, iconBounds.width, iconBounds.height, drag.rotation);
+    drag.preview = this.drawWeaponIcon(
+      pointerX,
+      pointerY,
+      drag.weaponId,
+      iconBounds.width,
+      iconBounds.height,
+      drag.rotation,
+      this.getGridWeaponIconTuning(drag.weaponId),
+    );
     drag.preview.setDepth(1000).setAlpha(0.86);
     drag.highlights = getWeaponShape(drag.weaponId, drag.rotation).map(() =>
       this.add.rectangle(0, 0, this.gridMetrics?.slotWidth ?? 58, this.gridMetrics?.slotHeight ?? 58, 0x39e75f, 0.5).setDepth(900),
@@ -1853,14 +1923,6 @@ export class GameScene extends Phaser.Scene {
     }
 
     return null;
-  }
-
-  private consumeSelectedOffer(): void {
-    this.offer = this.state.unlockedWeaponPool;
-  }
-
-  private canBuySelectedOffer(): boolean {
-    return this.selectedWeapon !== null && this.state.unlockedWeaponPool.includes(this.selectedWeapon) && this.state.canAffordWeapon(this.selectedWeapon);
   }
 
   private selectFirstAvailableOffer(): void {
@@ -2274,6 +2336,103 @@ export class GameScene extends Phaser.Scene {
     this.flashHint(`${this.getSelectedEnemyScaleLabel()}: ${Math.round(defaultScale * 100)}%`);
   }
 
+  private selectCheatWeapon(direction: number): void {
+    const weaponIds = this.getCheatWeaponIds();
+    this.selectedCheatWeaponIndex = (this.selectedCheatWeaponIndex + direction + weaponIds.length) % weaponIds.length;
+    this.showPrep();
+  }
+
+  private selectCheatWeaponRotation(direction: number): void {
+    this.selectedCheatWeaponRotation = this.toWeaponIconRotation(this.selectedCheatWeaponRotation + direction);
+    this.showPrep();
+  }
+
+  private getSelectedCheatWeaponId(): WeaponId {
+    return this.getCheatWeaponIds()[this.selectedCheatWeaponIndex] ?? 'pistol';
+  }
+
+  private drawCheatWeaponPreview(weaponId: WeaponId, rotation: WeaponIconRotation, x: number, y: number): void {
+    const shape = getWeaponShape(weaponId, rotation);
+    const cols = Math.max(...shape.map((cell) => cell.col)) + 1;
+    const rows = Math.max(...shape.map((cell) => cell.row)) + 1;
+    const slot = 24;
+    const gap = 4;
+    const width = cols * slot + (cols - 1) * gap;
+    const height = rows * slot + (rows - 1) * gap;
+    const startX = x - width / 2;
+    const startY = y - height / 2;
+
+    for (const cell of shape) {
+      this.add
+        .rectangle(startX + cell.col * (slot + gap) + slot / 2, startY + cell.row * (slot + gap) + slot / 2, slot, slot, TERMINAL_UI.slot, 0.92)
+        .setDepth(82)
+        .setStrokeStyle(1, TERMINAL_UI.stroke, 0.72);
+    }
+
+    this.drawWeaponIcon(x, y, weaponId, width, height, rotation, this.getGridWeaponIconTuning(weaponId)).setDepth(83);
+  }
+
+  private drawWeaponTuningControl(
+    left: number,
+    right: number,
+    y: number,
+    label: string,
+    key: WeaponIconTuningKey,
+    minusLabel: string,
+    plusLabel: string,
+    step: number,
+    guard: (action: () => void) => () => void,
+  ): void {
+    const weaponId = this.getSelectedCheatWeaponId();
+    const value = this.getWeaponIconTuning(weaponId)[key];
+    const shownValue = key === 'scaleBoost' ? `${Math.round(value * 100)}%` : `${value}px`;
+
+    this.createFittedText(left + 20, y, label, 54, 13, '#aeb89b', 0).setDepth(82);
+    this.createButton(left + 98, y, 58, 28, minusLabel, 0x2f6062, guard(() => this.adjustSelectedWeaponIconTuning(key, -step)), 81);
+    this.createFittedText((left + right) / 2 + 12, y, shownValue, 78, 13, '#f3ead2').setDepth(82);
+    this.createButton(right - 42, y, 58, 28, plusLabel, 0x2f6062, guard(() => this.adjustSelectedWeaponIconTuning(key, step)), 81);
+  }
+
+  private adjustSelectedWeaponIconTuning(key: WeaponIconTuningKey, delta: number): void {
+    const weaponId = this.getSelectedCheatWeaponId();
+    const tuning = this.getWeaponIconTuning(weaponId);
+    const nextValue = key === 'scaleBoost' ? Phaser.Math.Clamp(tuning[key] + delta, 0.2, 3) : Phaser.Math.Clamp(tuning[key] + delta, -80, 80);
+    tuning[key] = key === 'scaleBoost' ? Math.round(nextValue * 100) / 100 : Math.round(nextValue);
+    this.showPrep();
+    this.flashHint(`${weaponId}: size ${Math.round(tuning.scaleBoost * 100)}% x ${tuning.offsetX} y ${tuning.offsetY}`);
+  }
+
+  private resetSelectedWeaponIconTuning(): void {
+    const weaponId = this.getSelectedCheatWeaponId();
+    WEAPON_GRID_ICON_TUNING[weaponId] = { ...DEFAULT_WEAPON_GRID_ICON_TUNING[weaponId] };
+    this.showPrep();
+    this.flashHint(`${weaponId}: reset icon`);
+  }
+
+  private getWeaponIconTuning(weaponId: WeaponId): Required<WeaponIconVisualTuning> {
+    return WEAPON_GRID_ICON_TUNING[weaponId];
+  }
+
+  private getCheatWeaponIds(): WeaponId[] {
+    return Object.keys(WEAPONS) as WeaponId[];
+  }
+
+  private exposeWeaponIconTuningForDevTools(): void {
+    const snapshot = Object.fromEntries(
+      this.getCheatWeaponIds().map((weaponId) => [
+        weaponId,
+        {
+          ...this.getWeaponIconTuning(weaponId),
+        },
+      ]),
+    );
+    (globalThis as typeof globalThis & { __survWeaponIconTuning?: typeof snapshot }).__survWeaponIconTuning = snapshot;
+  }
+
+  private toWeaponIconRotation(rotation: number): WeaponIconRotation {
+    return (((rotation % 4) + 4) % 4) as WeaponIconRotation;
+  }
+
   private updateSelectedEnemyScale(value: number): GameSettings {
     const enemyId = this.getSelectedCheatEnemyId();
     const settings = loadGameSettings();
@@ -2307,6 +2466,3 @@ export class GameScene extends Phaser.Scene {
     this.tweens.add({ targets: hint, alpha: 0, y: hint.y - 20, duration: 900, delay: 350, onComplete: () => hint.destroy() });
   }
 }
-
-
-

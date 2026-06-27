@@ -1,4 +1,5 @@
 import Phaser from 'phaser';
+import { startBackgroundMusic } from '../audio/GameAudio';
 import { AssetKeys } from '../assets/assetManifest';
 import { DEBUG_FLAGS } from '../config/debugFlags';
 import { ROAD_BOUNDS } from '../config/roadBounds';
@@ -54,6 +55,7 @@ export class BattleScene extends Phaser.Scene {
   create(): void {
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => this.shutdown());
     this.drawBattlefield();
+    startBackgroundMusic(this);
     this.startBattle();
   }
 

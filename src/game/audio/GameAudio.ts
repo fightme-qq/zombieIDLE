@@ -1,7 +1,7 @@
 import Phaser from 'phaser';
 import { AssetKeys } from '../assets/assetManifest';
 import type { WeaponId } from '../data/weaponData';
-import { getSfxVolume } from '../save/GameSettings';
+import { getMusicVolume, getSfxVolume } from '../save/GameSettings';
 
 type WeaponFireSfxDefinition = {
   key: string;
@@ -9,6 +9,10 @@ type WeaponFireSfxDefinition = {
   throttleMs: number;
   seekSeconds?: number;
   detuneRange?: number;
+};
+
+type VolumeControlledSound = Phaser.Sound.BaseSound & {
+  volume: number;
 };
 
 const WEAPON_FIRE_SFX: Partial<Record<WeaponId, WeaponFireSfxDefinition>> = {
@@ -74,7 +78,18 @@ const GRENADE_EXPLOSION_SFX: WeaponFireSfxDefinition = {
   detuneRange: 12,
 };
 
+const BACKGROUND_MUSIC_PLAYLIST = [
+  { key: AssetKeys.Audio.Music.carnivalOfNightmares, volume: 0.42 },
+  { key: AssetKeys.Audio.Music.dreadfulApparition, volume: 0.42 },
+  { key: AssetKeys.Audio.Music.echoesOfTheAbyss, volume: 0.42 },
+] as const;
+
 const lastPlayedByScene = new WeakMap<Phaser.Scene, Map<string, number>>();
+let backgroundMusic: Phaser.Sound.BaseSound | null = null;
+let backgroundMusicScene: Phaser.Scene | null = null;
+let backgroundMusicTrackIndex = 0;
+let backgroundMusicRequested = false;
+let backgroundUnlockListenerRegistered = false;
 
 export function playWeaponFireSfx(scene: Phaser.Scene, weaponId: WeaponId): void {
   const sfx = WEAPON_FIRE_SFX[weaponId];
@@ -83,6 +98,30 @@ export function playWeaponFireSfx(scene: Phaser.Scene, weaponId: WeaponId): void
 
 export function playGrenadeExplosionSfx(scene: Phaser.Scene): void {
   playSfx(scene, GRENADE_EXPLOSION_SFX);
+}
+
+export function startBackgroundMusic(scene: Phaser.Scene): void {
+  backgroundMusicRequested = true;
+  backgroundMusicScene = scene;
+
+  if (backgroundMusic?.isPlaying) {
+    applyMusicVolume();
+    return;
+  }
+
+  if (scene.sound.locked) {
+    registerBackgroundMusicUnlock(scene);
+    return;
+  }
+
+  playCurrentBackgroundMusicTrack(scene);
+}
+
+export function applyMusicVolume(): void {
+  if (!backgroundMusic) return;
+
+  const track = BACKGROUND_MUSIC_PLAYLIST[backgroundMusicTrackIndex];
+  setSoundVolume(backgroundMusic, track.volume * getMusicVolume());
 }
 
 function playSfx(scene: Phaser.Scene, sfx: WeaponFireSfxDefinition | undefined): void {
@@ -111,4 +150,43 @@ function getScenePlayedMap(scene: Phaser.Scene): Map<string, number> {
   }
 
   return scenePlayed;
+}
+
+function registerBackgroundMusicUnlock(scene: Phaser.Scene): void {
+  if (backgroundUnlockListenerRegistered) return;
+
+  backgroundUnlockListenerRegistered = true;
+  scene.sound.once(Phaser.Sound.Events.UNLOCKED, () => {
+    backgroundUnlockListenerRegistered = false;
+    if (!backgroundMusicRequested) return;
+    playCurrentBackgroundMusicTrack(backgroundMusicScene ?? scene);
+  });
+}
+
+function playCurrentBackgroundMusicTrack(scene: Phaser.Scene): void {
+  if (backgroundMusic?.isPlaying) return;
+
+  const track = BACKGROUND_MUSIC_PLAYLIST[backgroundMusicTrackIndex];
+  if (!scene.cache.audio.exists(track.key)) return;
+
+  backgroundMusic?.destroy();
+  backgroundMusic = scene.sound.add(track.key, {
+    loop: false,
+    volume: track.volume * getMusicVolume(),
+  });
+
+  backgroundMusic.once(Phaser.Sound.Events.COMPLETE, () => {
+    backgroundMusic?.destroy();
+    backgroundMusic = null;
+    backgroundMusicTrackIndex = (backgroundMusicTrackIndex + 1) % BACKGROUND_MUSIC_PLAYLIST.length;
+    if (backgroundMusicRequested) {
+      playCurrentBackgroundMusicTrack(backgroundMusicScene ?? scene);
+    }
+  });
+
+  backgroundMusic.play();
+}
+
+function setSoundVolume(sound: Phaser.Sound.BaseSound, volume: number): void {
+  (sound as VolumeControlledSound).volume = volume;
 }

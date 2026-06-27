@@ -24,3 +24,6 @@
 | `images/enemies/zombie-crawler/*.png` | Generated with PixelLab MCP | Project-generated asset | Character `f403a65d-efee-45cc-ac97-ac662498af0b`; 6-frame walk, 7-frame attack, and 9-frame death animations |
 | `images/enemies/zombie-mutant/*.png` | Generated with PixelLab MCP | Project-generated asset | Character `2dedbf25-4fb0-4f69-8e30-2cbaace8b1f6`; 6-frame walk, 7-frame attack, and 9-frame death animations |
 | `images/enemies/mutant.png` | Generated with PixelLab MCP | Project-generated asset | Battle enemy sprite, generated 2026-06-07 |
+| `audio/carnival-of-nightmares_87951.mp3` | Project-provided asset | Verify license before release | Background music track, added 2026-06-27 |
+| `audio/dreadful-apparition_87916.mp3` | Project-provided asset | Verify license before release | Background music track, added 2026-06-27 |
+| `audio/echoes-of-the-abyss_87954.mp3` | Project-provided asset | Verify license before release | Background music track, added 2026-06-27 |
