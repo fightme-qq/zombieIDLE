@@ -106,6 +106,11 @@ type TutorialTarget = {
   source?: Phaser.Math.Vector2;
   focus: Phaser.Geom.Rectangle;
 };
+type TutorialOverlayState = {
+  hand: Phaser.GameObjects.Image;
+  key: string;
+  loopTimer: Phaser.Time.TimerEvent | null;
+};
 
 const PREP_TABS: PrepTab[] = ['fight', 'equip', 'upgrades', 'shop'];
 const TUTORIAL_STORAGE_KEY = 'surv:tutorial:v1';
@@ -161,6 +166,7 @@ export class GameScene extends Phaser.Scene {
   private weaponUpgradeScrollBounds: Phaser.Geom.Rectangle | null = null;
   private fightPanelRefreshMs = 0;
   private tutorialCompleted = new Set<TutorialStepId>();
+  private tutorialOverlay: TutorialOverlayState | null = null;
 
   constructor() {
     super(SceneKeys.Game);
@@ -178,6 +184,7 @@ export class GameScene extends Phaser.Scene {
 
   update(_time: number, delta: number): void {
     if (this.activeTab !== 'fight' || this.settingsOpen) return;
+    if (this.getTutorialTarget()) return;
 
     this.fightPanelRefreshMs -= delta;
     if (this.fightPanelRefreshMs > 0) return;
@@ -244,6 +251,7 @@ export class GameScene extends Phaser.Scene {
     this.clearDragState(false);
     this.destroySettingsPanel();
     this.clearInteractiveObjects();
+    this.clearTutorialOverlay(false);
     this.children.removeAll(true);
     this.gridMetrics = null;
     this.weaponOfferViews = [];
@@ -2549,7 +2557,10 @@ export class GameScene extends Phaser.Scene {
 
   private drawTutorialOverlay(): void {
     const target = this.getTutorialTarget();
-    if (!target) return;
+    if (!target) {
+      this.clearTutorialOverlay(true);
+      return;
+    }
 
     const depth = 1700;
     const handWidth = 154;
@@ -2558,16 +2569,23 @@ export class GameScene extends Phaser.Scene {
     const originY = 0.72;
     const targetPoint = this.clampTutorialHandPoint(target.target, handWidth, handHeight, originX, originY);
     const sourcePoint = this.clampTutorialHandPoint(target.source ?? new Phaser.Math.Vector2(target.target.x + 24, target.target.y - 22), handWidth, handHeight, originX, originY);
+    const key = this.getTutorialOverlayKey(target, sourcePoint, targetPoint);
+    if (this.tutorialOverlay?.key === key && this.tutorialOverlay.hand.active) return;
+
+    this.clearTutorialOverlay(false);
+
     const hand = this.add.image(sourcePoint.x, sourcePoint.y, AssetKeys.UI.tutorialHand);
     hand.setDepth(depth).setOrigin(originX, originY).setDisplaySize(handWidth, handHeight).setAlpha(0);
+    this.tutorialOverlay = { hand, key, loopTimer: null };
 
     const play = (): void => {
       if (!hand.scene || !hand.active) return;
+      this.tweens.killTweensOf(hand);
       hand.setPosition(sourcePoint.x, sourcePoint.y).setAlpha(0);
       this.tweens.add({
         targets: hand,
-        alpha: 0.98,
-        duration: 180,
+        alpha: 0.96,
+        duration: 260,
         ease: 'Sine.easeOut',
         onComplete: () => {
           if (!hand.scene || !hand.active) return;
@@ -2575,17 +2593,20 @@ export class GameScene extends Phaser.Scene {
             targets: hand,
             x: targetPoint.x,
             y: targetPoint.y,
-            duration: target.source ? 780 : 360,
+            duration: target.source ? 760 : 420,
             ease: 'Sine.easeInOut',
-            hold: 260,
+            hold: 420,
             onComplete: () => {
               if (!hand.scene || !hand.active) return;
               this.tweens.add({
                 targets: hand,
                 alpha: 0,
-                duration: 220,
+                duration: 300,
                 ease: 'Sine.easeIn',
-                onComplete: () => this.time.delayedCall(480, play),
+                onComplete: () => {
+                  if (!this.tutorialOverlay || this.tutorialOverlay.hand !== hand) return;
+                  this.tutorialOverlay.loopTimer = this.time.delayedCall(620, play);
+                },
               });
             },
           });
@@ -2594,6 +2615,28 @@ export class GameScene extends Phaser.Scene {
     };
 
     play();
+  }
+
+  private clearTutorialOverlay(destroyHand: boolean): void {
+    if (!this.tutorialOverlay) return;
+    if (this.tutorialOverlay.loopTimer) {
+      this.tutorialOverlay.loopTimer.remove(false);
+    }
+    this.tweens.killTweensOf(this.tutorialOverlay.hand);
+    if (destroyHand && this.tutorialOverlay.hand.active) {
+      this.tutorialOverlay.hand.destroy();
+    }
+    this.tutorialOverlay = null;
+  }
+
+  private getTutorialOverlayKey(target: TutorialTarget, source: Phaser.Math.Vector2, destination: Phaser.Math.Vector2): string {
+    return [
+      target.step,
+      Math.round(source.x),
+      Math.round(source.y),
+      Math.round(destination.x),
+      Math.round(destination.y),
+    ].join(':');
   }
 
   private clampTutorialHandPoint(point: Phaser.Math.Vector2, width: number, height: number, originX: number, originY: number): Phaser.Math.Vector2 {
