@@ -27,3 +27,5 @@
 | `audio/carnival-of-nightmares_87951.mp3` | Project-provided asset | Verify license before release | Background music track, added 2026-06-27 |
 | `audio/dreadful-apparition_87916.mp3` | Project-provided asset | Verify license before release | Background music track, added 2026-06-27 |
 | `audio/echoes-of-the-abyss_87954.mp3` | Project-provided asset | Verify license before release | Background music track, added 2026-06-27 |
+| `audio/zombie-ambient.mp3` | Project-provided asset | Verify license before release | Random zombie ambient bark, added 2026-06-28 |
+| `audio/zombie-death-16.mp3` | Project-provided asset | Verify license before release | Random zombie death bark, added 2026-06-28 |

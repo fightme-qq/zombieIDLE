@@ -11,6 +11,7 @@ import {
   type WeaponRotation,
 } from '../idle/EquipGrid';
 import { getGridSizeForActiveCells, getNextCellPurchase } from '../idle/Economy';
+import { getArmorRating } from '../idle/BaseDefense';
 import { getStageAfterFailure, getStageAfterWin } from '../idle/StageProgression';
 import { createWeaponProgress, getEquippedWeaponDps, getEquippedWeaponIds, getWeaponStatUpgradeCost, type WeaponProgress } from '../idle/WeaponStats';
 
@@ -20,22 +21,45 @@ export type RunStateOptions = {
   includeStarterPistol?: boolean;
 };
 
+export type RunStateSnapshot = {
+  version: 1;
+  soft: number;
+  hard: number;
+  zombieKills: number;
+  bossKills: number;
+  currentStage: number;
+  highestStage: number;
+  maxBunkerHp: number;
+  baseArmorLevel: number;
+  emergencyRepairLevel: number;
+  gridCols: number;
+  gridRows: number;
+  activeCells: number;
+  rareChanceLevel: number;
+  placedWeapons: PlacedWeapon[];
+  weaponProgress: Record<WeaponId, WeaponProgress>;
+};
+
 export const STARTER_WEAPON_ID: WeaponId = 'pistol';
 
-const BASE_HP_UPGRADE_COST = 25;
-const BASE_ARMOR_UPGRADE_COST = 35;
-const BASE_ARMOR_PER_LEVEL = 1;
+const BASE_HP_UPGRADE_COST = 100;
+const BASE_ARMOR_UPGRADE_COST = 125;
 const BASE_ARMOR_MAX_LEVEL = 20;
+const EMERGENCY_REPAIR_BASE_COST = 180;
+const EMERGENCY_REPAIR_COST_SCALE = 1.55;
+const EMERGENCY_REPAIR_MAX_LEVEL = 5;
+const RARE_CHANCE_COST = 140;
 
 export class RunState {
-  soft = 1000;
-  hard = 25;
+  soft = 80;
+  hard = 0;
   zombieKills = 0;
   bossKills = 0;
   currentStage = 1;
   highestStage = 1;
   maxBunkerHp = 100;
   baseArmorLevel = 0;
+  emergencyRepairLevel = 0;
   gridCols: number = IDLE_GRID_CONFIG.startCols;
   gridRows: number = IDLE_GRID_CONFIG.startRows;
   activeCells: number = IDLE_GRID_CONFIG.startCols * IDLE_GRID_CONFIG.startRows;
@@ -209,10 +233,15 @@ export class RunState {
   }
 
   buyBunkerHp(): boolean {
-    if (this.soft < BASE_HP_UPGRADE_COST) return false;
-    this.soft -= BASE_HP_UPGRADE_COST;
+    const cost = this.getBunkerHpCost();
+    if (this.soft < cost) return false;
+    this.soft -= cost;
     this.maxBunkerHp += 20;
     return true;
+  }
+
+  getBunkerHpCost(): number {
+    return BASE_HP_UPGRADE_COST;
   }
 
   buyBaseArmor(): boolean {
@@ -223,11 +252,24 @@ export class RunState {
   }
 
   get baseArmor(): number {
-    return this.baseArmorLevel * BASE_ARMOR_PER_LEVEL;
+    return getArmorRating(this.baseArmorLevel);
   }
 
   getBaseArmorCost(): number | null {
     return this.baseArmorLevel >= BASE_ARMOR_MAX_LEVEL ? null : BASE_ARMOR_UPGRADE_COST;
+  }
+
+  buyEmergencyRepair(): boolean {
+    const cost = this.getEmergencyRepairCost();
+    if (cost === null || this.soft < cost) return false;
+    this.soft -= cost;
+    this.emergencyRepairLevel += 1;
+    return true;
+  }
+
+  getEmergencyRepairCost(): number | null {
+    if (this.emergencyRepairLevel >= EMERGENCY_REPAIR_MAX_LEVEL) return null;
+    return Math.ceil(EMERGENCY_REPAIR_BASE_COST * EMERGENCY_REPAIR_COST_SCALE ** this.emergencyRepairLevel);
   }
 
   buyGridCell(): boolean {
@@ -258,10 +300,15 @@ export class RunState {
   }
 
   buyRareChance(): boolean {
-    if (this.soft < 25 || this.rareChanceLevel >= 5) return false;
-    this.soft -= 25;
+    const cost = this.getRareChanceCost();
+    if (this.soft < cost || this.rareChanceLevel >= 5) return false;
+    this.soft -= cost;
     this.rareChanceLevel += 1;
     return true;
+  }
+
+  getRareChanceCost(): number {
+    return RARE_CHANCE_COST;
   }
 
   cheatEquipEveryWeapon(): number {
@@ -310,5 +357,106 @@ export class RunState {
       progress[weaponId] = createWeaponProgress(weaponId === STARTER_WEAPON_ID);
     });
     return progress;
+  }
+
+  toSnapshot(): RunStateSnapshot {
+    return {
+      version: 1,
+      soft: this.soft,
+      hard: this.hard,
+      zombieKills: this.zombieKills,
+      bossKills: this.bossKills,
+      currentStage: this.currentStage,
+      highestStage: this.highestStage,
+      maxBunkerHp: this.maxBunkerHp,
+      baseArmorLevel: this.baseArmorLevel,
+      emergencyRepairLevel: this.emergencyRepairLevel,
+      gridCols: this.gridCols,
+      gridRows: this.gridRows,
+      activeCells: this.activeCells,
+      rareChanceLevel: this.rareChanceLevel,
+      placedWeapons: this.placedWeapons.map((placement) => ({ ...placement })),
+      weaponProgress: Object.fromEntries(
+        (Object.keys(WEAPONS) as WeaponId[]).map((weaponId) => [
+          weaponId,
+          {
+            unlocked: this.getWeaponProgress(weaponId).unlocked,
+            stats: { ...this.getWeaponProgress(weaponId).stats },
+          },
+        ]),
+      ) as Record<WeaponId, WeaponProgress>,
+    };
+  }
+
+  restore(snapshot: Partial<RunStateSnapshot> | null | undefined): void {
+    const fresh = new RunState();
+    this.soft = this.toNonNegativeInt(snapshot?.soft, fresh.soft);
+    this.hard = this.toNonNegativeInt(snapshot?.hard, fresh.hard);
+    this.zombieKills = this.toNonNegativeInt(snapshot?.zombieKills, fresh.zombieKills);
+    this.bossKills = this.toNonNegativeInt(snapshot?.bossKills, fresh.bossKills);
+    this.currentStage = Math.max(1, this.toNonNegativeInt(snapshot?.currentStage, fresh.currentStage));
+    this.highestStage = Math.max(this.currentStage, this.toNonNegativeInt(snapshot?.highestStage, fresh.highestStage));
+    this.maxBunkerHp = Math.max(1, this.toNonNegativeInt(snapshot?.maxBunkerHp, fresh.maxBunkerHp));
+    this.baseArmorLevel = this.toNonNegativeInt(snapshot?.baseArmorLevel, fresh.baseArmorLevel);
+    this.emergencyRepairLevel = this.toNonNegativeInt(snapshot?.emergencyRepairLevel, fresh.emergencyRepairLevel);
+    this.activeCells = Math.min(Math.max(this.toNonNegativeInt(snapshot?.activeCells, fresh.activeCells), 1), this.maxGridCols * this.maxGridRows);
+    const gridSize = getGridSizeForActiveCells(this.activeCells);
+    this.gridCols = gridSize.cols;
+    this.gridRows = gridSize.rows;
+    this.rareChanceLevel = this.toNonNegativeInt(snapshot?.rareChanceLevel, fresh.rareChanceLevel);
+
+    (Object.keys(WEAPONS) as WeaponId[]).forEach((weaponId) => {
+      const saved = snapshot?.weaponProgress?.[weaponId];
+      this.weaponProgress[weaponId] = {
+        unlocked: saved?.unlocked ?? weaponId === STARTER_WEAPON_ID,
+        stats: {
+          ...createWeaponProgress().stats,
+          ...saved?.stats,
+        },
+      };
+    });
+
+    this.placedWeapons.length = 0;
+    this.nextPlacementId = 1;
+    const placements = Array.isArray(snapshot?.placedWeapons) ? snapshot.placedWeapons : fresh.placedWeapons;
+    placements.forEach((placement) => {
+      if (!this.isKnownWeapon(placement.weaponId)) return;
+      const rotation = this.toWeaponRotation(placement.rotation);
+      if (!this.canPlaceWeapon(placement.weaponId, placement.col, placement.row, rotation)) return;
+      const id = this.toPositiveInt(placement.id, this.nextPlacementId);
+      this.placedWeapons.push({
+        id,
+        weaponId: placement.weaponId,
+        col: this.toNonNegativeInt(placement.col, 0),
+        row: this.toNonNegativeInt(placement.row, 0),
+        rotation,
+        level: Math.max(1, this.toNonNegativeInt(placement.level, 1)),
+      });
+      this.nextPlacementId = Math.max(this.nextPlacementId, id + 1);
+    });
+
+    if (this.placedWeapons.length === 0) {
+      this.placeWeapon(STARTER_WEAPON_ID, 0, 0, 0);
+    }
+  }
+
+  reset(): void {
+    this.restore(new RunState().toSnapshot());
+  }
+
+  private toNonNegativeInt(value: unknown, fallback: number): number {
+    return typeof value === 'number' && Number.isFinite(value) ? Math.max(0, Math.floor(value)) : fallback;
+  }
+
+  private toPositiveInt(value: unknown, fallback: number): number {
+    return typeof value === 'number' && Number.isFinite(value) ? Math.max(1, Math.floor(value)) : fallback;
+  }
+
+  private toWeaponRotation(value: unknown): WeaponRotation {
+    return (((typeof value === 'number' ? Math.floor(value) : 0) % 4 + 4) % 4) as WeaponRotation;
+  }
+
+  private isKnownWeapon(weaponId: unknown): weaponId is WeaponId {
+    return typeof weaponId === 'string' && weaponId in WEAPONS;
   }
 }

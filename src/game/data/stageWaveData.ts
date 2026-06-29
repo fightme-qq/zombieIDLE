@@ -12,6 +12,8 @@ export type StageWaveDefinition = {
   enemies: readonly StageEnemyGroup[];
   totalEnemies: number;
   maxActiveEnemies: number;
+  initialSpawnDelayMs: number;
+  spawnIntervalMs: number;
 };
 
 type StageEnemyCounts = Partial<Record<EnemyId, number>>;
@@ -51,6 +53,23 @@ const STAGE_WAVE_PATTERNS: readonly StageEnemyCounts[] = [
   },
 ];
 
+function getStageMaxActiveEnemies(stage: number): number {
+  if (stage === 1) return 3;
+  if (stage <= 3) return 6;
+  if (stage <= 9) return 14;
+  return IDLE_WAVE_CONFIG.maxActiveEnemies;
+}
+
+function getStageInitialSpawnDelayMs(stage: number): number {
+  return stage === 1 ? 1000 : 250;
+}
+
+function getStageSpawnIntervalMs(stage: number): number {
+  if (stage === 1) return 3600;
+  if (stage <= 3) return 3100;
+  return Math.max(1100, 2600 - stage * 90);
+}
+
 export function getStageWave(stage: number): StageWaveDefinition {
   if (!Number.isInteger(stage) || stage < 1) {
     throw new RangeError(`Stage must be a positive integer. Received: ${stage}`);
@@ -75,7 +94,9 @@ export function getStageWave(stage: number): StageWaveDefinition {
     stage,
     enemies,
     totalEnemies: enemies.reduce((total, group) => total + group.count, 0),
-    maxActiveEnemies: IDLE_WAVE_CONFIG.maxActiveEnemies,
+    maxActiveEnemies: getStageMaxActiveEnemies(stage),
+    initialSpawnDelayMs: getStageInitialSpawnDelayMs(stage),
+    spawnIntervalMs: getStageSpawnIntervalMs(stage),
   };
 }
 

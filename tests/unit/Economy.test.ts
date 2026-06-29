@@ -22,7 +22,7 @@ describe('Economy', () => {
       activeCells: 12,
       nextActiveCells: 13,
       purchasedCells: 0,
-      cost: 25,
+      cost: 110,
     });
 
     expect(getNextCellPurchase(225)).toEqual({
@@ -51,9 +51,9 @@ describe('Economy', () => {
   });
 
   it('uses exponential cell costs', () => {
-    expect(getNextCellCost(0)).toBe(25);
-    expect(getNextCellCost(1)).toBe(29);
-    expect(getNextCellCost(2)).toBe(32);
+    expect(getNextCellCost(0)).toBe(110);
+    expect(getNextCellCost(1)).toBe(124);
+    expect(getNextCellCost(2)).toBe(138);
     expect(getNextCellCost(10)).toBeGreaterThan(getNextCellCost(9));
   });
 
@@ -64,8 +64,8 @@ describe('Economy', () => {
   });
 
   it('rewards only combat kills and scales by stage and enemy tier', () => {
-    expect(getKillReward(1, 'zombie')).toBe(3);
-    expect(getKillReward(1, 'zombie-tank')).toBe(11);
+    expect(getKillReward(1, 'zombie')).toBe(4);
+    expect(getKillReward(1, 'zombie-tank')).toBe(15);
     expect(getKillReward(10, 'zombie')).toBeGreaterThan(getKillReward(1, 'zombie'));
     expect(getBossReward(10)).toBeGreaterThan(getKillReward(10, 'zombie-tank'));
   });

@@ -9,6 +9,8 @@ type WeaponFireSfxDefinition = {
   throttleMs: number;
   seekSeconds?: number;
   detuneRange?: number;
+  volumeJitter?: number;
+  skipIfPlaying?: boolean;
 };
 
 type VolumeControlledSound = Phaser.Sound.BaseSound & {
@@ -78,6 +80,23 @@ const GRENADE_EXPLOSION_SFX: WeaponFireSfxDefinition = {
   detuneRange: 12,
 };
 
+const ZOMBIE_AMBIENT_SFX: WeaponFireSfxDefinition = {
+  key: AssetKeys.Audio.Enemies.zombieAmbient,
+  volume: 0.16,
+  throttleMs: 5200,
+  detuneRange: 45,
+  volumeJitter: 0.16,
+  skipIfPlaying: true,
+};
+
+const ZOMBIE_DEATH_SFX: WeaponFireSfxDefinition = {
+  key: AssetKeys.Audio.Enemies.zombieDeath,
+  volume: 0.2,
+  throttleMs: 360,
+  detuneRange: 55,
+  volumeJitter: 0.2,
+};
+
 const BACKGROUND_MUSIC_PLAYLIST = [
   { key: AssetKeys.Audio.Music.carnivalOfNightmares, volume: 0.42 },
   { key: AssetKeys.Audio.Music.dreadfulApparition, volume: 0.42 },
@@ -85,6 +104,7 @@ const BACKGROUND_MUSIC_PLAYLIST = [
 ] as const;
 
 const lastPlayedByScene = new WeakMap<Phaser.Scene, Map<string, number>>();
+const nextZombieAmbientAt = new WeakMap<Phaser.Scene, number>();
 let backgroundMusic: Phaser.Sound.BaseSound | null = null;
 let backgroundMusicScene: Phaser.Scene | null = null;
 let backgroundMusicTrackIndex = 0;
@@ -98,6 +118,34 @@ export function playWeaponFireSfx(scene: Phaser.Scene, weaponId: WeaponId): void
 
 export function playGrenadeExplosionSfx(scene: Phaser.Scene): void {
   playSfx(scene, GRENADE_EXPLOSION_SFX);
+}
+
+export function maybePlayZombieAmbientSfx(scene: Phaser.Scene, activeEnemyCount: number): void {
+  if (activeEnemyCount <= 0) {
+    nextZombieAmbientAt.delete(scene);
+    return;
+  }
+
+  const now = scene.time.now;
+  const nextAt = nextZombieAmbientAt.get(scene);
+  if (nextAt === undefined) {
+    nextZombieAmbientAt.set(scene, now + Phaser.Math.Between(2200, 6200));
+    return;
+  }
+  if (now < nextAt) return;
+
+  nextZombieAmbientAt.set(scene, now + Phaser.Math.Between(5600, 11800));
+  const chance = Phaser.Math.Clamp(0.24 + activeEnemyCount * 0.045, 0.28, 0.86);
+  if (Math.random() > chance) return;
+
+  playSfx(scene, ZOMBIE_AMBIENT_SFX);
+}
+
+export function maybePlayZombieDeathSfx(scene: Phaser.Scene, isBoss = false): void {
+  const chance = isBoss ? 0.72 : 0.16;
+  if (Math.random() > chance) return;
+
+  playSfx(scene, ZOMBIE_DEATH_SFX);
 }
 
 export function startBackgroundMusic(scene: Phaser.Scene): void {
@@ -133,10 +181,12 @@ function playSfx(scene: Phaser.Scene, sfx: WeaponFireSfxDefinition | undefined):
   const scenePlayed = getScenePlayedMap(scene);
   const lastPlayedAt = scenePlayed.get(sfx.key) ?? -Infinity;
   if (now - lastPlayedAt < sfx.throttleMs) return;
+  if (sfx.skipIfPlaying && scene.sound.get(sfx.key)?.isPlaying) return;
 
   scenePlayed.set(sfx.key, now);
+  const volumeJitter = sfx.volumeJitter ? Phaser.Math.FloatBetween(1 - sfx.volumeJitter, 1 + sfx.volumeJitter) : 1;
   scene.sound.play(sfx.key, {
-    volume: sfx.volume * getSfxVolume(),
+    volume: sfx.volume * getSfxVolume() * volumeJitter,
     seek: sfx.seekSeconds ?? 0,
     detune: sfx.detuneRange ? Phaser.Math.Between(-sfx.detuneRange, sfx.detuneRange) : 0,
   });

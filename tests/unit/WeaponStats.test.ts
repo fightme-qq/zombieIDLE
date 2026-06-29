@@ -7,6 +7,7 @@ import {
   getWeaponComputedStats,
   getWeaponDamage,
   getWeaponDps,
+  getWeaponSpecialEffectLabel,
   getWeaponStatUpgradeCost,
 } from '../../src/game/idle/WeaponStats';
 import { RunState, STARTER_WEAPON_ID } from '../../src/game/state/RunState';
@@ -48,26 +49,38 @@ describe('WeaponStats', () => {
     upgradedProgress.stats.fireRate = 1;
     upgradedProgress.stats.special = 1;
 
-    expect(getWeaponStatUpgradeCost(STARTER_WEAPON_ID, 'damage', 0)).toBe(35);
+    expect(getWeaponStatUpgradeCost(STARTER_WEAPON_ID, 'damage', 0)).toBe(95);
     expect(getWeaponStatUpgradeCost(STARTER_WEAPON_ID, 'damage', 1)).toBeGreaterThan(getWeaponStatUpgradeCost(STARTER_WEAPON_ID, 'damage', 0)!);
     expect(getWeaponDamage(STARTER_WEAPON_ID, upgradedProgress)).toBeGreaterThan(getWeaponDamage(STARTER_WEAPON_ID, baseProgress));
     expect(getWeaponDps(STARTER_WEAPON_ID, upgradedProgress)).toBeGreaterThan(getWeaponDps(STARTER_WEAPON_ID, baseProgress));
   });
 
-  it('does not turn pistols into spread weapons through special upgrades', () => {
+  it('turns pistol special into double tap instead of spread', () => {
     const progress = createWeaponProgress(true);
     progress.stats.special = 5;
 
     expect(getWeaponComputedStats('pistol', progress).spread).toBe(1);
+    expect(getWeaponComputedStats('pistol', progress).doubleTapInterval).toBe(3);
     expect(getWeaponComputedStats('shotgun', progress).spread).toBeGreaterThan(getWeaponComputedStats('shotgun').spread);
   });
 
-  it('fires one grenade by default before special upgrades add extra shots', () => {
+  it('keeps grenade shots single while special upgrades blast radius', () => {
     const progress = createWeaponProgress(true);
     progress.stats.special = 2;
 
     expect(getWeaponComputedStats('grenadeLauncher').spread).toBe(1);
-    expect(getWeaponComputedStats('grenadeLauncher', progress).spread).toBeGreaterThan(1);
+    expect(getWeaponComputedStats('grenadeLauncher', progress).spread).toBe(1);
+    expect(getWeaponComputedStats('grenadeLauncher', progress).grenadeRadius).toBeGreaterThan(getWeaponComputedStats('grenadeLauncher').grenadeRadius);
+  });
+
+  it('exposes per-weapon special combat parameters', () => {
+    const progress = createWeaponProgress(true);
+    progress.stats.special = 5;
+
+    expect(getWeaponComputedStats('tesla', progress).teslaChainJumps).toBe(3);
+    expect(getWeaponComputedStats('assaultRifle', progress).focusMaxStacks).toBe(14);
+    expect(getWeaponComputedStats('sniperRifle', progress).pierceCount).toBe(3);
+    expect(getWeaponSpecialEffectLabel('sniperRifle', 5)).toContain('pierces');
   });
 
   it('exposes magazine and reload stats for weapon rhythm', () => {
@@ -84,7 +97,7 @@ describe('WeaponStats', () => {
 
     expect(baseStats.rangePx).toBe(220);
     expect(getWeaponComputedStats('pistol', progress).rangePx).toBeGreaterThan(baseStats.rangePx);
-    expect(getWeaponStatUpgradeCost('pistol', 'range', 0)).toBe(45);
+    expect(getWeaponStatUpgradeCost('pistol', 'range', 0)).toBe(120);
   });
 
   it('scales weapon range toward class-specific caps', () => {
@@ -115,7 +128,7 @@ describe('WeaponStats', () => {
 
     expect(stats.critChance).toBeCloseTo(0.12);
     expect(stats.critMultiplier).toBe(1.5);
-    expect(getWeaponStatUpgradeCost('pistol', 'critChance', 0)).toBe(65);
+    expect(getWeaponStatUpgradeCost('pistol', 'critChance', 0)).toBe(160);
   });
 
   it('lets a basic stage 1 zombie reach the base before one pistol can kill it', () => {

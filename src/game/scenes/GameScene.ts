@@ -13,14 +13,17 @@ import {
   type WeaponId,
   type WeaponUpgradeStatId,
 } from '../data/weaponData';
-import { getWeaponComputedStats, getWeaponDps, getWeaponTotalLevel } from '../idle/WeaponStats';
+import { IDLE_GRID_CONFIG } from '../data/idleContent';
+import { getWeaponComputedStats, getWeaponDps, getWeaponSpecialEffectLabel, getWeaponTotalLevel } from '../idle/WeaponStats';
 import { getBunkerWeaponMount } from '../idle/BunkerMounts';
+import { getArmorDamageReduction, getEmergencyRepairHeal } from '../idle/BaseDefense';
 import { gameplayStart, gameplayStop } from '../platform/yandexGames';
+import { clearAllSurvStorage, saveRunProgress } from '../save/RunProgress';
 import { getDefaultEnemyScale, loadGameSettings, updateGameSettings, type GameSettings } from '../save/GameSettings';
 import { BATTLE_SNAPSHOT_REGISTRY_KEY } from './BattleScene';
 import type { BattleSnapshot, BattleWeaponRuntimeSnapshot } from '../systems/BattleSystem';
 import { getWeaponShape, rotateWeaponRotation, type PlacedWeapon, type WeaponRotation } from '../state/RunState';
-import { sharedRunState } from '../state/sharedRunState';
+import { resetSharedRunState, sharedRunState } from '../state/sharedRunState';
 import { createCurrencyValue, type CurrencyKind } from '../ui/currencyUi';
 import { toggleLocale, UI_TEXT } from '../ui/uiText';
 
@@ -72,6 +75,7 @@ type WeaponOfferView = {
   weaponId: WeaponId | null;
   bg: Phaser.GameObjects.Rectangle;
   label: Phaser.GameObjects.Text;
+  bounds: Phaser.Geom.Rectangle;
 };
 
 type PanelBounds = {
@@ -94,8 +98,18 @@ type PanelContentBounds = {
 type SidePanelSide = 'left' | 'right';
 type VolumeSettingId = 'musicVolume' | 'sfxVolume';
 type WeaponIconTuningKey = keyof WeaponIconVisualTuning;
+type TutorialStepId = 'buy-weapon' | 'upgrade-weapon' | 'buy-cell';
+type TutorialTarget = {
+  step: TutorialStepId;
+  message: string;
+  target: Phaser.Math.Vector2;
+  source?: Phaser.Math.Vector2;
+  focus: Phaser.Geom.Rectangle;
+};
 
 const PREP_TABS: PrepTab[] = ['fight', 'equip', 'upgrades', 'shop'];
+const TUTORIAL_STORAGE_KEY = 'surv:tutorial:v1';
+const TUTORIAL_STEPS: TutorialStepId[] = ['buy-weapon', 'upgrade-weapon', 'buy-cell'];
 const SIDE_PANEL_WIDTH = 430;
 const SIDE_PANEL_HEIGHT = 500;
 const SIDE_PANEL_Y = 342;
@@ -140,11 +154,13 @@ export class GameScene extends Phaser.Scene {
   private settingsOpen = false;
   private settingsPanel: Phaser.GameObjects.Container | null = null;
   private sellDropZone: SellDropZone | null = null;
+  private readonly interactiveObjects = new Set<Phaser.GameObjects.GameObject>();
   private readonly dragStartDistance = 12;
   private weaponUpgradeScrollY = 0;
   private weaponUpgradeScrollMax = 0;
   private weaponUpgradeScrollBounds: Phaser.Geom.Rectangle | null = null;
   private fightPanelRefreshMs = 0;
+  private tutorialCompleted = new Set<TutorialStepId>();
 
   constructor() {
     super(SceneKeys.Game);
@@ -155,6 +171,7 @@ export class GameScene extends Phaser.Scene {
     this.input.mouse?.disableContextMenu();
     this.input.on('pointerdown', this.handlePointerDown, this);
     this.input.on('wheel', this.handleWheel, this);
+    this.tutorialCompleted = this.loadTutorialCompletion();
     gameplayStart();
     this.showPrep();
   }
@@ -225,8 +242,9 @@ export class GameScene extends Phaser.Scene {
 
   private showPrep(): void {
     this.clearDragState(false);
+    this.destroySettingsPanel();
+    this.clearInteractiveObjects();
     this.children.removeAll(true);
-    this.settingsPanel = null;
     this.gridMetrics = null;
     this.weaponOfferViews = [];
 
@@ -255,10 +273,14 @@ export class GameScene extends Phaser.Scene {
     if (this.settingsOpen) {
       this.drawSettingsPanel();
     }
+    this.drawTutorialOverlay();
   }
 
   toggleSettingsPanel(): void {
     this.settingsOpen = !this.settingsOpen;
+    if (!this.settingsOpen) {
+      this.destroySettingsPanel();
+    }
     this.showPrep();
   }
 
@@ -640,10 +662,27 @@ export class GameScene extends Phaser.Scene {
     this.createFittedText(left.left, left.top + 42, UI_TEXT.upgrades.baseTitle, left.width, 24, '#f3ead2', 0);
     this.add.rectangle(left.centerX, left.top + 72, left.width, 1, TERMINAL_UI.accent, 0.44);
     this.createFittedText(left.left + 18, left.top + 118, `${UI_TEXT.upgrades.durability}: ${this.state.maxBunkerHp}`, left.width - 36, 20, '#88c56b', 0);
-    this.createFittedText(left.left + 18, left.top + 154, `${UI_TEXT.upgrades.armor}: ${this.state.baseArmor}`, left.width - 36, 20, '#d6b85a', 0);
     this.createFittedText(
       left.left + 18,
-      left.top + 202,
+      left.top + 154,
+      `${UI_TEXT.upgrades.armor}: ${this.state.baseArmor} (${Math.round(getArmorDamageReduction(this.state.baseArmor, this.state.currentStage) * 100)}%)`,
+      left.width - 36,
+      20,
+      '#d6b85a',
+      0,
+    );
+    this.createFittedText(
+      left.left + 18,
+      left.top + 190,
+      `${UI_TEXT.upgrades.emergencyRepair}: ${this.state.emergencyRepairLevel}/5 (+${getEmergencyRepairHeal(this.state.maxBunkerHp, this.state.emergencyRepairLevel)} HP)`,
+      left.width - 36,
+      20,
+      '#6fb7ff',
+      0,
+    );
+    this.createFittedText(
+      left.left + 18,
+      left.top + 238,
       'Base upgrades help zombies reach the bunker without making early fights instantly fatal.',
       left.width - 36,
       15,
@@ -660,7 +699,7 @@ export class GameScene extends Phaser.Scene {
       UI_TEXT.upgrades.durability,
       '+20 HP',
       `HP ${this.state.maxBunkerHp}`,
-      25,
+      this.state.getBunkerHpCost(),
       () => this.buyBaseUpgrade('hp'),
     );
     this.drawBaseUpgradeRow(
@@ -672,6 +711,16 @@ export class GameScene extends Phaser.Scene {
       `${UI_TEXT.upgrades.level} ${this.state.baseArmorLevel}/20`,
       this.state.getBaseArmorCost(),
       () => this.buyBaseUpgrade('armor'),
+    );
+    this.drawBaseUpgradeRow(
+      right.centerX,
+      right.top + 246,
+      right.width,
+      UI_TEXT.upgrades.emergencyRepair,
+      UI_TEXT.upgrades.emergencyRepairEffect(this.state.emergencyRepairLevel + 1),
+      `${UI_TEXT.upgrades.level} ${this.state.emergencyRepairLevel}/5`,
+      this.state.getEmergencyRepairCost(),
+      () => this.buyBaseUpgrade('emergency'),
     );
   }
 
@@ -690,8 +739,14 @@ export class GameScene extends Phaser.Scene {
     this.drawWeaponUpgradeRow(x, y, width, label, effect, level, maxed ? UI_TEXT.upgrades.max : `${cost}`, affordable, maxed, onClick);
   }
 
-  private buyBaseUpgrade(kind: 'hp' | 'armor'): void {
-    const bought = kind === 'hp' ? this.state.buyBunkerHp() : this.state.buyBaseArmor();
+  private buyBaseUpgrade(kind: 'hp' | 'armor' | 'emergency'): void {
+    const bought =
+      kind === 'hp'
+        ? this.state.buyBunkerHp()
+        : kind === 'armor'
+          ? this.state.buyBaseArmor()
+          : this.state.buyEmergencyRepair();
+    if (bought) saveRunProgress(this.state);
     this.showPrep();
     this.flashHint(bought ? UI_TEXT.messages.upgradeBought : UI_TEXT.messages.upgradeUnavailable);
   }
@@ -702,9 +757,9 @@ export class GameScene extends Phaser.Scene {
     this.createFittedText(panel.x - panel.width / 2 + 26, 112, UI_TEXT.upgrades.baseTitle, 180, 18, '#f3ead2', 0);
     this.add.rectangle(panel.x + 76, 112, panel.width - 210, 1, TERMINAL_UI.accent, 0.44);
 
-    this.createBaseUpgradeChip(panel.x - 140, 154, UI_TEXT.upgrades.durability, 25, () => this.tryUpgrade('hp'));
+    this.createBaseUpgradeChip(panel.x - 140, 154, UI_TEXT.upgrades.durability, this.state.getBunkerHpCost(), () => this.tryUpgrade('hp'));
     this.createBaseUpgradeChip(panel.x, 154, UI_TEXT.upgrades.cell, this.state.getNextGridCellCost(), () => this.tryUpgrade('cell'));
-    this.createBaseUpgradeChip(panel.x + 140, 154, UI_TEXT.upgrades.rareRoll, 25, () => this.tryUpgrade('rare'));
+    this.createBaseUpgradeChip(panel.x + 140, 154, UI_TEXT.upgrades.rareRoll, this.state.getRareChanceCost(), () => this.tryUpgrade('rare'));
   }
 
   private drawArsenalList(): void {
@@ -751,9 +806,9 @@ export class GameScene extends Phaser.Scene {
         this.createCurrencyLine(content.left + 136, y + 13, UI_TEXT.upgrades.unlock, weapon.unlockCost.amount, weapon.unlockCost.currency, content.width - 168, 13, '#d58c7e');
       }
 
-      this.add
+      this.registerInteractive(this.add
         .zone(content.centerX, y, content.width, 60)
-        .setInteractive({ useHandCursor: true })
+        .setInteractive({ useHandCursor: true }))
         .on('pointerdown', () => {
           if (this.selectedArsenalWeapon !== weaponId) {
             this.weaponUpgradeScrollY = 0;
@@ -793,10 +848,11 @@ export class GameScene extends Phaser.Scene {
         if (!this.state.unlockWeapon(weaponId)) {
         this.flashHint(weapon.unlockCost.currency === 'hard' ? UI_TEXT.messages.notEnoughHard : UI_TEXT.messages.notEnoughSoft);
         return;
-      }
-      this.selectFirstAvailableOffer();
-      this.showPrep();
-      this.flashHint(`${weapon.name}: ${UI_TEXT.upgrades.owned}`);
+        }
+        this.selectFirstAvailableOffer();
+        saveRunProgress(this.state);
+        this.showPrep();
+        this.flashHint(`${weapon.name}: ${UI_TEXT.upgrades.owned}`);
       });
       return;
     }
@@ -830,18 +886,20 @@ export class GameScene extends Phaser.Scene {
         y,
         content.width,
         this.getWeaponStatLabel(stat.id),
-        this.getWeaponStatEffectLabel(stat.id, level),
+        this.getWeaponStatEffectLabel(weaponId, stat.id, level),
         `${UI_TEXT.upgrades.level} ${level}/${stat.maxLevel}`,
         maxed ? UI_TEXT.upgrades.max : `${cost}`,
         affordable,
         maxed,
         () => {
-        if (!this.state.upgradeWeaponStat(weaponId, stat.id)) {
-          this.flashHint(UI_TEXT.messages.upgradeUnavailable);
-          return;
-        }
-        this.showPrep();
-        this.flashHint(`${this.getWeaponStatLabel(stat.id)} ${UI_TEXT.upgrades.upgraded}`);
+          if (!this.state.upgradeWeaponStat(weaponId, stat.id)) {
+            this.flashHint(UI_TEXT.messages.upgradeUnavailable);
+            return;
+          }
+          this.completeTutorialStep('upgrade-weapon');
+          saveRunProgress(this.state);
+          this.showPrep();
+          this.flashHint(`${this.getWeaponStatLabel(stat.id)} ${UI_TEXT.upgrades.upgraded}`);
         },
         listContainer,
       );
@@ -858,7 +916,8 @@ export class GameScene extends Phaser.Scene {
     return this.getWeaponsInCategory(categoryId)[0] ?? 'pistol';
   }
 
-  private getWeaponStatEffectLabel(statId: WeaponUpgradeStatId, level: number): string {
+  private getWeaponStatEffectLabel(weaponId: WeaponId, statId: WeaponUpgradeStatId, level: number): string {
+    if (statId === 'special') return getWeaponSpecialEffectLabel(weaponId, level);
     return UI_TEXT.upgrades.statEffects[statId](level);
   }
 
@@ -943,6 +1002,7 @@ export class GameScene extends Phaser.Scene {
           .rectangle(x + slotWidth / 2, y + slotHeight / 2, slotWidth, slotHeight, fill, alpha)
           .setStrokeStyle(2, active ? 0x4f6445 : 0x263226, active ? 1 : 0.55)
           .setInteractive({ useHandCursor: true });
+        this.registerInteractive(rect);
 
         rect.on('pointerdown', (pointer: Phaser.Input.Pointer) => {
           if (pointer.rightButtonDown()) return;
@@ -985,7 +1045,7 @@ export class GameScene extends Phaser.Scene {
         this.add.rectangle(x, y, hitWidth, hitHeight, 0x000000, 0).setStrokeStyle(3, TERMINAL_UI.accent, 0.95).setDepth(13);
       }
       icon.setSize(hitWidth, hitHeight);
-      icon.setInteractive(new Phaser.Geom.Rectangle(-hitWidth / 2, -hitHeight / 2, hitWidth, hitHeight), Phaser.Geom.Rectangle.Contains);
+      this.registerInteractive(icon.setInteractive(new Phaser.Geom.Rectangle(-hitWidth / 2, -hitHeight / 2, hitWidth, hitHeight), Phaser.Geom.Rectangle.Contains));
       if (icon.input) icon.input.cursor = 'pointer';
       icon.on('pointerdown', (pointer: Phaser.Input.Pointer) =>
         this.beginPendingWeaponDrag(
@@ -1057,7 +1117,12 @@ export class GameScene extends Phaser.Scene {
         const priceBg = this.add.rectangle(infoCenterX, 13, priceBgWidth, 21, affordable ? 0x263f23 : 0x402522, 1).setStrokeStyle(1, affordable ? TERMINAL_UI.success : TERMINAL_UI.danger, 0.88);
 
         card.add([bg, iconBay, label, priceBg, price.container]);
-        this.weaponOfferViews.push({ weaponId, bg, label });
+        this.weaponOfferViews.push({
+          weaponId,
+          bg,
+          label,
+          bounds: new Phaser.Geom.Rectangle(cardX - cardWidth / 2, y - cardHeight / 2, cardWidth, cardHeight),
+        });
         this.drawWeaponIcon(cardX + iconX, y, weaponId, 40, 32, 0);
         card.setSize(cardWidth, cardHeight);
         this.createWeaponOfferHitArea(cardX, y, weaponId, cardWidth, cardHeight);
@@ -1094,6 +1159,8 @@ export class GameScene extends Phaser.Scene {
         return;
       }
 
+      this.completeTutorialStep('buy-cell');
+      saveRunProgress(this.state);
       this.showPrep();
       this.flashHint(UI_TEXT.messages.upgradeBought);
     });
@@ -1144,6 +1211,7 @@ export class GameScene extends Phaser.Scene {
         this.flashHint(UI_TEXT.messages.notEnoughSoft);
         return;
       }
+      saveRunProgress(this.state);
       this.showPrep();
       this.flashHint(`${weapon.name} ${UI_TEXT.upgrades.upgraded}`);
     });
@@ -1282,7 +1350,8 @@ export class GameScene extends Phaser.Scene {
     this.createButton(x + 68, actionTop + 68, 130, 30, '+1M S+H', 0x4a743c, onlyWhenCheatsOpen(() => this.applyCheat('million')), 81);
     this.createButton(x - 68, actionTop + 102, 130, 30, UI_TEXT.cheats.stage, 0x4c5f87, onlyWhenCheatsOpen(() => this.applyCheat('stage')), 81);
     this.createButton(x + 68, actionTop + 102, 130, 30, '+10 cells', 0x4c5f87, onlyWhenCheatsOpen(() => this.applyCheat('cells10')), 81);
-    this.createButton(x, actionTop + 136, panelWidth - 78, 30, UI_TEXT.cheats.base, 0x4a743c, onlyWhenCheatsOpen(() => this.applyCheat('base')), 81);
+    this.createButton(x - 68, actionTop + 136, 130, 30, UI_TEXT.cheats.base, 0x4a743c, onlyWhenCheatsOpen(() => this.applyCheat('base')), 81);
+    this.createButton(x + 68, actionTop + 136, 130, 30, 'Reset progress', 0x7d2f2a, onlyWhenCheatsOpen(() => this.resetAllProgress()), 81);
   }
 
   private drawWeaponCheatsPanel(): void {
@@ -1406,9 +1475,11 @@ export class GameScene extends Phaser.Scene {
     const barBg = this.add.rectangle(barX, y, barWidth, 12, 0x050805, 0.88).setStrokeStyle(1, TERMINAL_UI.strokeDim, 0.9);
     const barFill = this.add.rectangle(barX - barWidth / 2, y, Math.max(2, barWidth * value), 12, TERMINAL_UI.accent, 0.95).setOrigin(0, 0.5);
     const valueText = this.add.text(barX, y + 22, `${Math.round(value * 100)}%`, this.getSettingsTextStyle(13)).setOrigin(0.5);
-    const barZone = this.add.zone(barX, y, barWidth + 12, 34).setInteractive({ useHandCursor: true });
+    const barZone = this.registerInteractive(this.add.zone(barX, y, barWidth + 12, 34).setInteractive({ useHandCursor: true }));
 
     barZone.on('pointerdown', (pointer: Phaser.Input.Pointer) => {
+      if (!this.settingsOpen) return;
+
       const left = panel.x + barX - barWidth / 2;
       this.setVolumeSetting(setting, (pointer.x - left) / barWidth);
     });
@@ -1421,11 +1492,37 @@ export class GameScene extends Phaser.Scene {
     const bg = this.add.rectangle(0, 0, width, height, 0x20291c, 1).setStrokeStyle(2, TERMINAL_UI.stroke, 0.95);
     const text = this.add.text(0, 0, label, this.getSettingsTextStyle(Math.min(16, Math.floor(height * 0.45)))).setOrigin(0.5);
     action.add([bg, text]);
-    action.setSize(width, height).setInteractive({ useHandCursor: true });
-    action.on('pointerdown', onClick);
+    this.registerInteractive(action.setSize(width, height).setInteractive({ useHandCursor: true }));
+    action.on('pointerdown', () => {
+      if (!this.settingsOpen) return;
+      onClick();
+    });
     action.on('pointerover', () => bg.setStrokeStyle(2, TERMINAL_UI.accent, 1));
     action.on('pointerout', () => bg.setStrokeStyle(2, TERMINAL_UI.stroke, 0.95));
     return action;
+  }
+
+  private destroySettingsPanel(): void {
+    this.settingsPanel?.destroy(true);
+    this.settingsPanel = null;
+  }
+
+  private registerInteractive<T extends Phaser.GameObjects.GameObject>(object: T): T {
+    this.interactiveObjects.add(object);
+    object.once(Phaser.GameObjects.Events.DESTROY, () => {
+      this.interactiveObjects.delete(object);
+    });
+    return object;
+  }
+
+  private clearInteractiveObjects(): void {
+    for (const object of this.interactiveObjects) {
+      object.removeAllListeners();
+      if ('disableInteractive' in object) {
+        (object as Phaser.GameObjects.GameObject & { disableInteractive: () => void }).disableInteractive();
+      }
+    }
+    this.interactiveObjects.clear();
   }
 
   private adjustVolumeSetting(setting: VolumeSettingId, delta: number): void {
@@ -1467,7 +1564,9 @@ export class GameScene extends Phaser.Scene {
   private createBaseUpgradeChip(x: number, y: number, label: string, cost: number | null, onClick: () => void): void {
     const width = 124;
     const height = 46;
-    const bg = this.add.rectangle(x, y, width, height, 0x1a2318, 0.98).setStrokeStyle(2, TERMINAL_UI.stroke, 0.94).setInteractive({ useHandCursor: true });
+    const bg = this.registerInteractive(
+      this.add.rectangle(x, y, width, height, 0x1a2318, 0.98).setStrokeStyle(2, TERMINAL_UI.stroke, 0.94).setInteractive({ useHandCursor: true }),
+    );
     this.add.rectangle(x, y - height / 2 + 5, width - 12, 2, TERMINAL_UI.accent, 0.36);
     this.createFittedText(x - width / 2 + 10, y - 7, label, 76, 13, '#d8d3b4', 0);
     if (cost === null) {
@@ -1483,10 +1582,10 @@ export class GameScene extends Phaser.Scene {
   }
 
   private createSegmentTab(x: number, y: number, width: number, label: string, active: boolean, onClick: () => void): void {
-    const bg = this.add
+    const bg = this.registerInteractive(this.add
       .rectangle(x, y, width, 32, active ? TERMINAL_UI.accentDark : 0x0c120e, active ? 1 : 0.92)
       .setStrokeStyle(2, active ? TERMINAL_UI.accent : TERMINAL_UI.stroke, active ? 1 : 0.8)
-      .setInteractive({ useHandCursor: true });
+      .setInteractive({ useHandCursor: true }));
     this.createFittedText(x, y, label, width - 10, 14, active ? '#f3ead2' : '#d8d3b4');
     bg.on('pointerdown', onClick);
     bg.on('pointerover', () => bg.setStrokeStyle(2, TERMINAL_UI.accent, 1));
@@ -1529,12 +1628,12 @@ export class GameScene extends Phaser.Scene {
       return object;
     };
 
-    const row = track(
+    const row = track(this.registerInteractive(
       this.add
       .rectangle(x, y, width, 42, 0x0b100d, 0.94)
       .setStrokeStyle(2, maxed ? TERMINAL_UI.strokeDim : affordable ? TERMINAL_UI.stroke : 0x5b3530, maxed ? 0.72 : 0.95)
       .setInteractive({ useHandCursor: !maxed }),
-    );
+    ));
     track(this.add.rectangle(x - width / 2 + 3, y, 4, 30, maxed ? TERMINAL_UI.strokeDim : affordable ? TERMINAL_UI.success : TERMINAL_UI.danger, maxed ? 0.65 : 0.95));
     track(this.createFittedText(x - width / 2 + 16, y - 8, label, 130, 15, '#f3ead2', 0));
     track(this.createFittedText(x - width / 2 + 16, y + 10, effect, 146, 12, '#aeb89b', 0));
@@ -1819,6 +1918,7 @@ export class GameScene extends Phaser.Scene {
       const refund = this.getWeaponSellValue(drag.fromPlacement.weaponId);
       this.state.soft += refund;
       this.selectedPlacementId = null;
+      saveRunProgress(this.state);
       this.clearDragState(false);
       this.showPrep();
       this.flashHint(`Продано +${refund}`);
@@ -1836,9 +1936,17 @@ export class GameScene extends Phaser.Scene {
       this.selectedPlacementId = null;
     }
 
-    if (placed && drag.fromOfferIndex !== null && drag.fromOfferIndex >= 0) {
-      this.offer[drag.fromOfferIndex] = null;
+    if (placed && drag.fromOfferIndex !== null) {
+      if (drag.fromOfferIndex >= 0) {
+        this.offer[drag.fromOfferIndex] = null;
+      }
+      this.selectedArsenalWeapon = drag.weaponId;
+      this.selectedArsenalCategory = WEAPONS[drag.weaponId].category;
+      this.completeTutorialStep('buy-weapon');
+      saveRunProgress(this.state);
       this.selectFirstAvailableOffer();
+    } else if (placed && drag.fromPlacement) {
+      saveRunProgress(this.state);
     }
 
     if (!placed && drag.fromPlacement) {
@@ -1940,7 +2048,7 @@ export class GameScene extends Phaser.Scene {
   }
 
   private createWeaponOfferHitArea(x: number, y: number, weaponId: WeaponId, width = 150, height = 106): void {
-    const hitArea = this.add.zone(x, y, width, height).setInteractive({ useHandCursor: true }).setDepth(25);
+    const hitArea = this.registerInteractive(this.add.zone(x, y, width, height).setInteractive({ useHandCursor: true }).setDepth(25));
     hitArea.on('pointerdown', (pointer: Phaser.Input.Pointer) => {
       if (pointer.rightButtonDown()) return;
 
@@ -2107,9 +2215,9 @@ export class GameScene extends Phaser.Scene {
       })
       .setOrigin(0.5);
     container.add([bg, text, price]);
-    container
+    this.registerInteractive(container
       .setSize(228, 58)
-      .setInteractive({ useHandCursor: true })
+      .setInteractive({ useHandCursor: true }))
       .on('pointerover', () => bg.setStrokeStyle(2, 0xf1d37a))
       .on('pointerout', () => bg.setStrokeStyle(2, TERMINAL_UI.accent))
       .on('pointerdown', onClick);
@@ -2125,7 +2233,9 @@ export class GameScene extends Phaser.Scene {
     onClick: () => void,
     depth = 0,
   ): void {
-    const button = this.add.rectangle(x, y, width, height, color, 1).setDepth(depth).setStrokeStyle(2, TERMINAL_UI.stroke, 0.95).setInteractive({ useHandCursor: true });
+    const button = this.registerInteractive(
+      this.add.rectangle(x, y, width, height, color, 1).setDepth(depth).setStrokeStyle(2, TERMINAL_UI.stroke, 0.95).setInteractive({ useHandCursor: true }),
+    );
     const shine = this.add.rectangle(x, y - height / 2 + 4, width - 12, 2, 0xf1d37a, 0.34).setDepth(depth + 1);
     const text = this.createFittedText(x, y, label, width - 18, Math.min(23, Math.floor(height * 0.52)), '#f3ead2').setDepth(depth + 2);
     button.on('pointerdown', onClick);
@@ -2137,7 +2247,6 @@ export class GameScene extends Phaser.Scene {
       button.setStrokeStyle(2, TERMINAL_UI.stroke, 0.95);
       shine.setAlpha(0.34);
     });
-    text.setInteractive({ useHandCursor: true }).on('pointerdown', onClick);
   }
 
   private createCurrencyLine(
@@ -2174,7 +2283,9 @@ export class GameScene extends Phaser.Scene {
     onClick: () => void,
     depth = 0,
   ): void {
-    const button = this.add.rectangle(x, y, width, height, color, 1).setDepth(depth).setStrokeStyle(2, TERMINAL_UI.stroke, 0.95).setInteractive({ useHandCursor: true });
+    const button = this.registerInteractive(
+      this.add.rectangle(x, y, width, height, color, 1).setDepth(depth).setStrokeStyle(2, TERMINAL_UI.stroke, 0.95).setInteractive({ useHandCursor: true }),
+    );
     const shine = this.add.rectangle(x, y - height / 2 + 4, width - 12, 2, 0xf1d37a, 0.34).setDepth(depth + 1);
     const fontSize = Math.min(23, Math.floor(height * 0.52));
     const iconSize = Math.max(16, Math.min(25, Math.floor(height * 0.55)));
@@ -2238,6 +2349,7 @@ export class GameScene extends Phaser.Scene {
 
   private tryUpgrade(kind: 'hp' | 'cell' | 'rare'): void {
     const bought = kind === 'hp' ? this.state.buyBunkerHp() : kind === 'cell' ? this.state.buyGridCell() : this.state.buyRareChance();
+    if (bought) saveRunProgress(this.state);
     this.showPrep();
     this.flashHint(bought ? UI_TEXT.messages.upgradeBought : UI_TEXT.messages.upgradeUnavailable);
   }
@@ -2245,6 +2357,7 @@ export class GameScene extends Phaser.Scene {
   private applyCheat(kind: 'soft' | 'million' | 'cells10' | 'stage' | 'base'): void {
     if (kind === 'soft') {
       this.state.soft += 1000;
+      saveRunProgress(this.state);
       this.showPrep();
       this.flashHint(UI_TEXT.cheats.soft);
       return;
@@ -2253,6 +2366,7 @@ export class GameScene extends Phaser.Scene {
     if (kind === 'million') {
       this.state.soft += 1_000_000;
       this.state.hard += 1_000_000;
+      saveRunProgress(this.state);
       this.showPrep();
       this.flashHint('+1M soft + hard');
       return;
@@ -2260,6 +2374,7 @@ export class GameScene extends Phaser.Scene {
 
     if (kind === 'cells10') {
       const added = this.state.cheatAddGridCells(10);
+      saveRunProgress(this.state);
       this.showPrep();
       this.flashHint(`+${added} cells`);
       return;
@@ -2268,12 +2383,14 @@ export class GameScene extends Phaser.Scene {
     if (kind === 'stage') {
       this.state.currentStage += 5;
       this.state.highestStage = Math.max(this.state.highestStage, this.state.currentStage);
+      saveRunProgress(this.state);
       this.showPrep();
       this.flashHint(UI_TEXT.cheats.stage);
       return;
     }
 
     this.state.maxBunkerHp += 100;
+    saveRunProgress(this.state);
     this.showPrep();
     this.flashHint(UI_TEXT.cheats.base);
   }
@@ -2289,8 +2406,25 @@ export class GameScene extends Phaser.Scene {
     this.selectedPlacementId = null;
     this.selectedWeapon = this.state.unlockedWeaponPool[0] ?? null;
     this.selectedRotation = 0;
+    saveRunProgress(this.state);
     this.showPrep();
     this.flashHint(`${UI_TEXT.cheats.equippedEveryWeapon}: ${placedCount}`);
+  }
+
+  private resetAllProgress(): void {
+    clearAllSurvStorage();
+    resetSharedRunState();
+    this.tutorialCompleted.clear();
+    this.activeTab = 'fight';
+    this.activeUpgradesSubTab = 'weapons';
+    this.selectedPlacementId = null;
+    this.selectedWeapon = this.state.unlockedWeaponPool[0] ?? null;
+    this.selectedArsenalCategory = 'pistols';
+    this.selectedArsenalWeapon = 'pistol';
+    this.weaponUpgradeScrollY = 0;
+    this.cheatsOpen = false;
+    this.showPrep();
+    this.flashHint('Progress reset');
   }
 
   private adjustRoadBound(side: 'left' | 'right', delta: number): void {
@@ -2411,6 +2545,327 @@ export class GameScene extends Phaser.Scene {
 
   private getWeaponIconTuning(weaponId: WeaponId): Required<WeaponIconVisualTuning> {
     return WEAPON_GRID_ICON_TUNING[weaponId];
+  }
+
+  private drawTutorialOverlay(): void {
+    const target = this.getTutorialTarget();
+    if (!target) return;
+
+    const depth = 1700;
+    const handWidth = 154;
+    const handHeight = 84;
+    const originX = 0.24;
+    const originY = 0.72;
+    const targetPoint = this.clampTutorialHandPoint(target.target, handWidth, handHeight, originX, originY);
+    const sourcePoint = this.clampTutorialHandPoint(target.source ?? new Phaser.Math.Vector2(target.target.x + 24, target.target.y - 22), handWidth, handHeight, originX, originY);
+    const hand = this.add.image(sourcePoint.x, sourcePoint.y, AssetKeys.UI.tutorialHand);
+    hand.setDepth(depth).setOrigin(originX, originY).setDisplaySize(handWidth, handHeight).setAlpha(0);
+
+    const play = (): void => {
+      if (!hand.scene || !hand.active) return;
+      hand.setPosition(sourcePoint.x, sourcePoint.y).setAlpha(0);
+      this.tweens.add({
+        targets: hand,
+        alpha: 0.98,
+        duration: 180,
+        ease: 'Sine.easeOut',
+        onComplete: () => {
+          if (!hand.scene || !hand.active) return;
+          this.tweens.add({
+            targets: hand,
+            x: targetPoint.x,
+            y: targetPoint.y,
+            duration: target.source ? 780 : 360,
+            ease: 'Sine.easeInOut',
+            hold: 260,
+            onComplete: () => {
+              if (!hand.scene || !hand.active) return;
+              this.tweens.add({
+                targets: hand,
+                alpha: 0,
+                duration: 220,
+                ease: 'Sine.easeIn',
+                onComplete: () => this.time.delayedCall(480, play),
+              });
+            },
+          });
+        },
+      });
+    };
+
+    play();
+  }
+
+  private clampTutorialHandPoint(point: Phaser.Math.Vector2, width: number, height: number, originX: number, originY: number): Phaser.Math.Vector2 {
+    const margin = 6;
+    return new Phaser.Math.Vector2(
+      Phaser.Math.Clamp(point.x, width * originX + margin, this.scale.width - width * (1 - originX) - margin),
+      Phaser.Math.Clamp(point.y, height * originY + margin, this.scale.height - height * (1 - originY) - margin),
+    );
+  }
+
+  private getTutorialTarget(): TutorialTarget | null {
+    this.syncTutorialAutoCompletion();
+    if (this.settingsOpen || this.cheatsOpen || this.dragState || this.pendingDrag) return null;
+
+    for (const step of TUTORIAL_STEPS) {
+      if (this.tutorialCompleted.has(step)) continue;
+      const target =
+        step === 'buy-weapon'
+          ? this.getBuyWeaponTutorialTarget()
+          : step === 'upgrade-weapon'
+            ? this.getUpgradeWeaponTutorialTarget()
+            : this.getBuyCellTutorialTarget();
+      if (target) return target;
+    }
+
+    return null;
+  }
+
+  private getBuyWeaponTutorialTarget(): TutorialTarget | null {
+    const candidate = this.findTutorialWeaponPlacementCandidate();
+    if (!candidate) return null;
+
+    if (this.activeTab !== 'equip') {
+      return this.createTabTutorialTarget('buy-weapon', 'equip', 'Открой склад оружия');
+    }
+
+    const offerView = this.weaponOfferViews.find((view) => view.weaponId === candidate.weaponId);
+    const gridPoint = this.getGridCellCenter(candidate.col, candidate.row);
+    if (!offerView || !gridPoint) return null;
+
+    return {
+      step: 'buy-weapon',
+      message: 'Перетащи оружие в свободные ячейки',
+      source: new Phaser.Math.Vector2(offerView.bounds.centerX, offerView.bounds.centerY),
+      target: gridPoint,
+      focus: this.createCenteredRect(gridPoint.x, gridPoint.y, this.gridMetrics?.slotWidth ?? 58, this.gridMetrics?.slotHeight ?? 58),
+    };
+  }
+
+  private getUpgradeWeaponTutorialTarget(): TutorialTarget | null {
+    const candidate = this.findTutorialWeaponUpgradeCandidate();
+    if (!candidate) return null;
+
+    if (this.activeTab !== 'upgrades') {
+      return this.createTabTutorialTarget('upgrade-weapon', 'upgrades', 'Открой улучшения');
+    }
+
+    if (this.activeUpgradesSubTab !== 'weapons') {
+      const subTab = this.getUpgradeSubTabBounds('weapons');
+      return {
+        step: 'upgrade-weapon',
+        message: 'Выбери оружие',
+        target: new Phaser.Math.Vector2(subTab.centerX, subTab.centerY),
+        focus: subTab,
+      };
+    }
+
+    if (this.selectedArsenalWeapon !== candidate.weaponId) {
+      return this.getArsenalWeaponCardTutorialTarget(candidate.weaponId);
+    }
+
+    return this.getWeaponUpgradeRowTutorialTarget(candidate.statId);
+  }
+
+  private getBuyCellTutorialTarget(): TutorialTarget | null {
+    const cost = this.state.getNextGridCellCost();
+    if (cost === null || this.state.soft < cost) return null;
+
+    if (this.activeTab !== 'equip') {
+      return this.createTabTutorialTarget('buy-cell', 'equip', 'Вернись к сетке');
+    }
+
+    const button = this.getGridCellPurchaseButtonBounds();
+    return {
+      step: 'buy-cell',
+      message: 'Купи ячейку для большого оружия',
+      target: new Phaser.Math.Vector2(button.centerX, button.centerY),
+      focus: button,
+    };
+  }
+
+  private createTabTutorialTarget(step: TutorialStepId, tab: PrepTab, message: string): TutorialTarget {
+    const bounds = this.getPrepTabBounds(tab);
+    return {
+      step,
+      message,
+      target: new Phaser.Math.Vector2(bounds.centerX, bounds.centerY),
+      focus: bounds,
+    };
+  }
+
+  private findTutorialWeaponPlacementCandidate(): { weaponId: WeaponId; col: number; row: number } | null {
+    for (const weaponId of this.state.unlockedWeaponPool) {
+      if (!this.state.canAffordWeapon(weaponId)) continue;
+      const cell = this.findFirstValidPlacementCell(weaponId);
+      if (cell) return { weaponId, col: cell.col, row: cell.row };
+    }
+
+    return null;
+  }
+
+  private findFirstValidPlacementCell(weaponId: WeaponId): { col: number; row: number } | null {
+    for (let row = 0; row < this.state.gridRows; row += 1) {
+      for (let col = 0; col < this.state.gridCols; col += 1) {
+        if (this.state.canPlaceWeapon(weaponId, col, row, 0)) return { col, row };
+      }
+    }
+
+    return null;
+  }
+
+  private findTutorialWeaponUpgradeCandidate(): { weaponId: WeaponId; statId: WeaponUpgradeStatId } | null {
+    for (const placement of this.state.placedWeapons) {
+      const progress = this.state.getWeaponProgress(placement.weaponId);
+      for (const stat of WEAPONS[placement.weaponId].upgradeStats) {
+        const cost = this.state.getWeaponStatUpgradeCost(placement.weaponId, stat.id);
+        if (progress.unlocked && cost !== null && this.state.soft >= cost) return { weaponId: placement.weaponId, statId: stat.id };
+      }
+    }
+
+    for (const weaponId of this.state.unlockedWeaponPool) {
+      const progress = this.state.getWeaponProgress(weaponId);
+      for (const stat of WEAPONS[weaponId].upgradeStats) {
+        const cost = this.state.getWeaponStatUpgradeCost(weaponId, stat.id);
+        if (progress.unlocked && cost !== null && this.state.soft >= cost) return { weaponId, statId: stat.id };
+      }
+    }
+
+    return null;
+  }
+
+  private getWeaponUpgradeRowTutorialTarget(statId: WeaponUpgradeStatId): TutorialTarget | null {
+    const panel = this.getRightPanel();
+    const content = this.getPanelContentBounds(panel);
+    const weapon = WEAPONS[this.selectedArsenalWeapon];
+    const index = weapon.upgradeStats.findIndex((stat) => stat.id === statId);
+    if (index < 0) return null;
+
+    const listTop = content.top + 194;
+    const rowSpacing = 50;
+    const y = listTop - this.weaponUpgradeScrollY + 21 + index * rowSpacing;
+    if (y < listTop || y > content.bottom) return null;
+
+    const bounds = this.createCenteredRect(panel.x, y, content.width, 42);
+    return {
+      step: 'upgrade-weapon',
+      message: 'Улучши оружие',
+      target: new Phaser.Math.Vector2(bounds.centerX, bounds.centerY),
+      focus: bounds,
+    };
+  }
+
+  private getArsenalWeaponCardTutorialTarget(weaponId: WeaponId): TutorialTarget | null {
+    if (WEAPONS[weaponId].category !== this.selectedArsenalCategory) {
+      const categoryIndex = WEAPON_CATEGORIES.findIndex((category) => category.id === WEAPONS[weaponId].category);
+      if (categoryIndex < 0) return null;
+
+      const content = this.getPanelContentBounds(this.getLeftPanel());
+      const tabGap = 4;
+      const tabWidth = Math.floor((content.width - tabGap * (WEAPON_CATEGORIES.length - 1)) / WEAPON_CATEGORIES.length);
+      const x = content.left + tabWidth / 2 + categoryIndex * (tabWidth + tabGap);
+      const bounds = this.createCenteredRect(x, content.top + 26, tabWidth, 30);
+      return {
+        step: 'upgrade-weapon',
+        message: 'Выбери тип оружия',
+        target: new Phaser.Math.Vector2(bounds.centerX, bounds.centerY),
+        focus: bounds,
+      };
+    }
+
+    const content = this.getPanelContentBounds(this.getLeftPanel());
+    const index = this.getWeaponsInCategory(this.selectedArsenalCategory).indexOf(weaponId);
+    if (index < 0) return null;
+
+    const bounds = this.createCenteredRect(content.centerX, content.top + 88 + index * 70, content.width, 60);
+    return {
+      step: 'upgrade-weapon',
+      message: 'Выбери это оружие',
+      target: new Phaser.Math.Vector2(bounds.centerX, bounds.centerY),
+      focus: bounds,
+    };
+  }
+
+  private getPrepTabBounds(tab: PrepTab): Phaser.Geom.Rectangle {
+    const { width, height } = this.scale;
+    const y = height - 38;
+    const tabButtons: Record<PrepTab, { x: number; width: number; height: number }> = {
+      shop: { x: width / 2 - 360, width: 144, height: 52 },
+      equip: { x: width / 2 - 190, width: 144, height: 52 },
+      fight: { x: width / 2, width: 190, height: 60 },
+      upgrades: { x: width / 2 + 230, width: 154, height: 52 },
+    };
+    const button = tabButtons[tab];
+    return this.createCenteredRect(button.x, y, button.width, button.height);
+  }
+
+  private getUpgradeSubTabBounds(tab: UpgradesSubTab): Phaser.Geom.Rectangle {
+    const panel = this.getLeftPanel();
+    const y = panel.y - panel.height / 2 + 20;
+    const tabWidth = 128;
+    const gap = 8;
+    const index = tab === 'weapons' ? 0 : 1;
+    const x = panel.x - tabWidth / 2 - gap / 2 + index * (tabWidth + gap);
+    return this.createCenteredRect(x, y, tabWidth, 30);
+  }
+
+  private getGridCellPurchaseButtonBounds(): Phaser.Geom.Rectangle {
+    const content = this.getPanelContentBounds(this.getLeftPanel());
+    const width = 194;
+    const height = 44;
+    return this.createCenteredRect(content.left + width / 2, content.bottom - height / 2, width, height);
+  }
+
+  private getGridCellCenter(col: number, row: number): Phaser.Math.Vector2 | null {
+    if (!this.gridMetrics) return null;
+    return new Phaser.Math.Vector2(
+      this.gridMetrics.startX + col * this.gridMetrics.pitchX + this.gridMetrics.slotWidth / 2,
+      this.gridMetrics.startY + row * this.gridMetrics.pitchY + this.gridMetrics.slotHeight / 2,
+    );
+  }
+
+  private createCenteredRect(x: number, y: number, width: number, height: number): Phaser.Geom.Rectangle {
+    return new Phaser.Geom.Rectangle(x - width / 2, y - height / 2, width, height);
+  }
+
+  private syncTutorialAutoCompletion(): void {
+    if (this.state.placedWeapons.length > 1) this.completeTutorialStep('buy-weapon', false);
+    if (this.state.activeCells > IDLE_GRID_CONFIG.startCols * IDLE_GRID_CONFIG.startRows) this.completeTutorialStep('buy-cell', false);
+    if (this.hasAnyWeaponUpgrade()) this.completeTutorialStep('upgrade-weapon', false);
+  }
+
+  private hasAnyWeaponUpgrade(): boolean {
+    return (Object.keys(WEAPONS) as WeaponId[]).some((weaponId) => {
+      const progress = this.state.getWeaponProgress(weaponId);
+      return Object.values(progress.stats).some((level) => level > 0);
+    });
+  }
+
+  private completeTutorialStep(step: TutorialStepId, persist = true): void {
+    if (this.tutorialCompleted.has(step)) return;
+    this.tutorialCompleted.add(step);
+    if (persist) this.saveTutorialCompletion();
+  }
+
+  private loadTutorialCompletion(): Set<TutorialStepId> {
+    try {
+      const raw = globalThis.localStorage?.getItem(TUTORIAL_STORAGE_KEY);
+      if (!raw) return new Set();
+      const parsed = JSON.parse(raw);
+      if (!Array.isArray(parsed)) return new Set();
+      return new Set(parsed.filter((step): step is TutorialStepId => TUTORIAL_STEPS.includes(step as TutorialStepId)));
+    } catch {
+      return new Set();
+    }
+  }
+
+  private saveTutorialCompletion(): void {
+    try {
+      globalThis.localStorage?.setItem(TUTORIAL_STORAGE_KEY, JSON.stringify([...this.tutorialCompleted]));
+    } catch {
+      // Tutorial persistence is optional; gameplay should keep working without storage.
+    }
   }
 
   private getCheatWeaponIds(): WeaponId[] {

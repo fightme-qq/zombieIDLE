@@ -11,13 +11,11 @@ describe('BossData', () => {
     expect(getBossForStage(40)?.id).toBe('boss_gatebreaker');
   });
 
-  it('keeps boss-only source enemies out of regular wave data', () => {
+  it('reuses regular enemy archetypes as boss sources without removing them from waves', () => {
     const wave = getStageWave(30);
     const enemyIds = wave.enemies.map((group) => group.enemyId);
 
-    for (const bossOnlyEnemyId of BOSS_ONLY_ENEMY_IDS) {
-      expect(enemyIds).not.toContain(bossOnlyEnemyId);
-    }
+    expect(BOSS_ONLY_ENEMY_IDS).toEqual([]);
+    expect(enemyIds).toContain(getBossForStage(30)?.enemyId);
   });
 });
-

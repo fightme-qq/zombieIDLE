@@ -44,6 +44,8 @@ type UiTextTable = {
     armor: string;
     armorEffect: (level: number) => string;
     durability: string;
+    emergencyRepair: string;
+    emergencyRepairEffect: (level: number) => string;
     cell: string;
     rareRoll: string;
     owned: string;
@@ -155,8 +157,10 @@ const TEXT_TABLES: Record<LocaleId, UiTextTable> = {
       baseTitle: 'База',
       weaponsTitle: 'Оружие',
       armor: 'Броня',
-      armorEffect: (level) => `-${level} урона от зомби`,
+      armorEffect: (level) => `рейтинг ${level * 8}`,
       durability: 'Прочность',
+      emergencyRepair: 'Аварийный ремонт',
+      emergencyRepairEffect: (level) => `автохил ${Math.min(55, 30 + (level - 1) * 5)}%`,
       cell: 'Клетка',
       rareRoll: 'Качество',
       owned: 'Куплено',
@@ -284,8 +288,10 @@ const TEXT_TABLES: Record<LocaleId, UiTextTable> = {
       baseTitle: 'Base',
       weaponsTitle: 'Weapons',
       armor: 'Armor',
-      armorEffect: (level) => `-${level} zombie damage`,
+      armorEffect: (level) => `rating ${level * 8}`,
       durability: 'Durability',
+      emergencyRepair: 'Emergency Repair',
+      emergencyRepairEffect: (level) => `${Math.min(55, 30 + (level - 1) * 5)}% auto-heal`,
       cell: 'Grid Cell',
       rareRoll: 'Quality',
       owned: 'Owned',

@@ -17,11 +17,11 @@ export type BossDefinition = {
 export const BOSSES: readonly BossDefinition[] = [
   {
     id: 'boss_gatebreaker',
-    enemyId: 'zombie-bruiser',
+    enemyId: 'zombie-armored',
     name: 'Gatebreaker',
-    hpMultiplier: 7.5,
-    speedMultiplier: 0.78,
-    damageMultiplier: 2.1,
+    hpMultiplier: 5.2,
+    speedMultiplier: 0.45,
+    damageMultiplier: 2.3,
     displayScale: 1.2,
     tokenReward: 6,
   },
@@ -29,8 +29,8 @@ export const BOSSES: readonly BossDefinition[] = [
     id: 'boss_plague_spitter',
     enemyId: 'zombie-toxic',
     name: 'Plague Spitter',
-    hpMultiplier: 6.4,
-    speedMultiplier: 0.9,
+    hpMultiplier: 7,
+    speedMultiplier: 0.5,
     damageMultiplier: 1.85,
     displayScale: 1.16,
     tokenReward: 7,
@@ -39,15 +39,15 @@ export const BOSSES: readonly BossDefinition[] = [
     id: 'boss_alpha_mutant',
     enemyId: 'zombie-mutant',
     name: 'Alpha Mutant',
-    hpMultiplier: 5.2,
-    speedMultiplier: 0.82,
+    hpMultiplier: 6,
+    speedMultiplier: 0.55,
     damageMultiplier: 2.35,
     displayScale: 1.12,
     tokenReward: 9,
   },
 ];
 
-export const BOSS_ONLY_ENEMY_IDS = BOSSES.map((boss) => boss.enemyId) as readonly EnemyId[];
+export const BOSS_ONLY_ENEMY_IDS = [] as readonly EnemyId[];
 
 export function isBossOnlyEnemy(enemyId: EnemyId): boolean {
   return BOSS_ONLY_ENEMY_IDS.includes(enemyId);
@@ -59,4 +59,3 @@ export function getBossForStage(stage: number): BossDefinition | null {
   const bossIndex = Math.floor(stage / 10 - 1) % BOSSES.length;
   return BOSSES[bossIndex] ?? BOSSES[0];
 }
-

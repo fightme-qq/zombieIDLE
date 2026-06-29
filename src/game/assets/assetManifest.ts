@@ -12,6 +12,9 @@ export const AssetKeys = {
     caps: 'currency-caps',
     tokens: 'currency-tokens',
   },
+  UI: {
+    tutorialHand: 'ui-tutorial-hand',
+  },
   Weapons: {
     starter_pistol: 'weapon-pistol',
     pistol: 'weapon-pistol',
@@ -38,6 +41,10 @@ export const AssetKeys = {
     },
     Effects: {
       grenadeExplosion: 'audio-effect-grenade-explosion',
+    },
+    Enemies: {
+      zombieAmbient: 'audio-enemy-zombie-ambient',
+      zombieDeath: 'audio-enemy-zombie-death',
     },
     Music: {
       carnivalOfNightmares: 'audio-music-carnival-of-nightmares',
@@ -145,6 +152,7 @@ export const imageAssets: ImageAsset[] = [
   { key: AssetKeys.Structures.bunker, url: 'assets/images/structures/bunker.png?v=20260624a' },
   { key: AssetKeys.Currency.caps, url: 'assets/images/ui/currency-caps.png?v=20260618c' },
   { key: AssetKeys.Currency.tokens, url: 'assets/images/ui/currency-tokens.png?v=20260618d' },
+  { key: AssetKeys.UI.tutorialHand, url: 'assets/images/ui/tutorial-hand.png?v=20260629a' },
   { key: AssetKeys.Weapons.pistol, url: 'assets/images/weapons/pistol.png' },
   { key: AssetKeys.Weapons.shotgun, url: 'assets/images/weapons/shotgun.png?v=20260611d' },
   { key: AssetKeys.Weapons.tesla, url: 'assets/images/weapons/tesla.png' },
@@ -176,6 +184,8 @@ export const audioAssets: AudioAsset[] = [
   { key: AssetKeys.Audio.Weapons.grenadeLauncherShot, urls: ['assets/audio/weapon-grenade-launcher-shot.mp3'] },
   { key: AssetKeys.Audio.Weapons.teslaShot, urls: ['assets/audio/weapon-tesla-shot.mp3'] },
   { key: AssetKeys.Audio.Effects.grenadeExplosion, urls: ['assets/audio/effect-grenade-explosion.mp3'] },
+  { key: AssetKeys.Audio.Enemies.zombieAmbient, urls: ['assets/audio/zombie-ambient.mp3'] },
+  { key: AssetKeys.Audio.Enemies.zombieDeath, urls: ['assets/audio/zombie-death-16.mp3'] },
   { key: AssetKeys.Audio.Music.carnivalOfNightmares, urls: ['assets/audio/carnival-of-nightmares_87951.mp3'] },
   { key: AssetKeys.Audio.Music.dreadfulApparition, urls: ['assets/audio/dreadful-apparition_87916.mp3'] },
   { key: AssetKeys.Audio.Music.echoesOfTheAbyss, urls: ['assets/audio/echoes-of-the-abyss_87954.mp3'] },

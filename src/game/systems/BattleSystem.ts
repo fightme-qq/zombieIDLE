@@ -3,11 +3,12 @@ import { EnemyFrameKeys } from '../assets/assetManifest';
 import type { BossDefinition } from '../data/bossData';
 import { ENEMIES, getEnemyDefinition, type EnemyDefinition, type EnemyId } from '../data/enemyData';
 import { expandStageWave, type StageWaveDefinition } from '../data/stageWaveData';
-import { getKillReward } from '../idle/Economy';
+import { getBossReward, getKillReward } from '../idle/Economy';
 import { getEnemyStageStats } from '../idle/EnemyScaling';
 import type { WeaponId } from '../data/weaponData';
-import { playGrenadeExplosionSfx, playWeaponFireSfx } from '../audio/GameAudio';
+import { maybePlayZombieAmbientSfx, maybePlayZombieDeathSfx, playGrenadeExplosionSfx, playWeaponFireSfx } from '../audio/GameAudio';
 import { getEnemyScale } from '../save/GameSettings';
+import { getEmergencyRepairHeal, getEmergencyRepairThreshold, getMitigatedBaseDamage } from '../idle/BaseDefense';
 import { getWeaponComputedStats, type WeaponProgress } from '../idle/WeaponStats';
 import { getRoadSpawnX } from '../config/roadBounds';
 import { getBunkerWeaponMount, type BunkerMountGrid } from '../idle/BunkerMounts';
@@ -45,6 +46,9 @@ type Projectile = {
   damage: number;
   critChance: number;
   critMultiplier: number;
+  pierceRemaining: number;
+  grenadeRadius: number;
+  grenadeSplashDamageMultiplier: number;
   velocityX: number;
   velocityY: number;
   maxRangePx: number;
@@ -64,6 +68,9 @@ type WeaponRuntimeState = {
   ammo: number;
   heat: number;
   overheatMs: number;
+  shotsFired: number;
+  focusTarget: Enemy | null;
+  focusStacks: number;
 };
 
 type BallisticWeaponId = Exclude<WeaponId, 'tesla'>;
@@ -139,6 +146,7 @@ export type BattleWeaponRuntimeSnapshot = {
 type BattleConfig = {
   bunkerHp: number;
   bunkerArmor: number;
+  emergencyRepairLevel: number;
   stage: number;
   wave: StageWaveDefinition;
   boss: BossDefinition | null;
@@ -158,6 +166,7 @@ export class BattleSystem {
   private hardEarned = 0;
   private bonusTargetKills = 0;
   private bossSpawned = false;
+  private emergencyRepairAvailable: boolean;
   private result: BattleResult = 'running';
 
   constructor(
@@ -165,7 +174,9 @@ export class BattleSystem {
     private readonly config: BattleConfig,
   ) {
     this.bunkerHp = config.bunkerHp;
+    this.emergencyRepairAvailable = config.emergencyRepairLevel > 0;
     this.spawnQueue = config.boss ? [] : this.createSpawnQueue(config.wave);
+    this.spawnCooldownMs = config.boss ? 250 : config.wave.initialSpawnDelayMs;
     this.weaponStates = config.weapons.map((weapon, index) => this.createWeaponRuntimeState(weapon, index * 180));
     this.createEnemyAnimations();
     this.createProjectileTextures();
@@ -192,6 +203,7 @@ export class BattleSystem {
     }
 
     this.spawnEnemies(deltaMs);
+    maybePlayZombieAmbientSfx(this.scene, this.getActiveEnemyCount());
     this.fireWeapons(deltaMs);
     this.updateEnemies(deltaMs);
     this.updateProjectiles(deltaMs);
@@ -220,10 +232,14 @@ export class BattleSystem {
     }
   }
 
-  setBaseDefense(maxBunkerHp: number, bunkerArmor: number): void {
+  setBaseDefense(maxBunkerHp: number, bunkerArmor: number, emergencyRepairLevel: number): void {
     const previousMaxHp = this.config.bunkerHp;
     this.config.bunkerHp = maxBunkerHp;
     this.config.bunkerArmor = bunkerArmor;
+    this.config.emergencyRepairLevel = emergencyRepairLevel;
+    if (emergencyRepairLevel <= 0) {
+      this.emergencyRepairAvailable = false;
+    }
     if (maxBunkerHp > previousMaxHp) {
       this.bunkerHp += maxBunkerHp - previousMaxHp;
     }
@@ -253,8 +269,9 @@ export class BattleSystem {
     this.hardEarned = 0;
     this.bonusTargetKills = 0;
     this.bossSpawned = false;
+    this.emergencyRepairAvailable = this.config.emergencyRepairLevel > 0;
     this.spawnQueue = boss ? [] : this.createSpawnQueue(wave);
-    this.spawnCooldownMs = 250;
+    this.spawnCooldownMs = boss ? 250 : wave.initialSpawnDelayMs;
     this.result = 'running';
   }
 
@@ -278,7 +295,7 @@ export class BattleSystem {
     const enemyId = this.spawnQueue.shift();
     if (!enemyId) return;
     this.spawnEnemy(enemyId);
-    this.spawnCooldownMs = Math.max(1100, 2600 - this.config.stage * 90);
+    this.spawnCooldownMs = this.config.wave.spawnIntervalMs;
   }
 
   private spawnEnemy(enemyId: EnemyId, lanePosition?: number, boss: BossDefinition | null = null): void {
@@ -328,22 +345,133 @@ export class BattleSystem {
       const target = this.findTargetInRange(mountX, mountY, stats.rangePx);
       if (!target) continue;
       const angle = Phaser.Math.Angle.Between(mountX, mountY, target.body.x, target.body.y);
+      const focusMultiplier = this.updateFocusMultiplier(weaponState, mountedWeapon.weaponId, target, stats.focusDamagePerStack, stats.focusMaxStacks);
+      const shotDamage = Math.ceil(stats.damage * focusMultiplier);
 
       if (mountedWeapon.weaponId === 'tesla') {
-        this.fireTeslaBeam(mountX, mountY, target, stats.damage, stats.critChance, stats.critMultiplier);
+        this.fireTeslaBeam(mountX, mountY, target, shotDamage, stats.critChance, stats.critMultiplier, stats.teslaChainJumps, stats.teslaChainFalloff);
         playWeaponFireSfx(this.scene, mountedWeapon.weaponId);
         this.consumeTeslaHeat(weaponState, stats.cooldownMs);
         continue;
       }
 
+      const shotCount = stats.spread + this.getDoubleTapBonusShots(weaponState, stats.doubleTapInterval);
       for (let shot = 0; shot < stats.spread; shot += 1) {
-        const spreadOffset = (shot - (stats.spread - 1) / 2) * this.getProjectileSpreadStep(mountedWeapon.weaponId);
-        this.spawnProjectile(mountX, mountY, angle + spreadOffset, stats.projectileSpeed, stats.damage, stats.critChance, stats.critMultiplier, mountedWeapon.weaponId, stats.rangePx);
+        const spreadOffset = (shot - (shotCount - 1) / 2) * this.getProjectileSpreadStep(mountedWeapon.weaponId);
+        this.spawnProjectile(
+          mountX,
+          mountY,
+          angle + spreadOffset,
+          stats.projectileSpeed,
+          shotDamage,
+          stats.critChance,
+          stats.critMultiplier,
+          mountedWeapon.weaponId,
+          stats.rangePx,
+          stats.pierceCount,
+          stats.grenadeRadius,
+          stats.grenadeSplashDamageMultiplier,
+        );
+      }
+      for (let shot = stats.spread; shot < shotCount; shot += 1) {
+        const spreadOffset = (shot - (shotCount - 1) / 2) * this.getProjectileSpreadStep(mountedWeapon.weaponId);
+        this.spawnProjectile(
+          mountX,
+          mountY,
+          angle + spreadOffset,
+          stats.projectileSpeed,
+          shotDamage,
+          stats.critChance,
+          stats.critMultiplier,
+          mountedWeapon.weaponId,
+          stats.rangePx,
+          stats.pierceCount,
+          stats.grenadeRadius,
+          stats.grenadeSplashDamageMultiplier,
+        );
       }
 
       playWeaponFireSfx(this.scene, mountedWeapon.weaponId);
       this.consumeAmmo(weaponState, stats.magazineSize, stats.reloadMs, stats.cooldownMs);
     }
+  }
+
+  private getDoubleTapBonusShots(state: WeaponRuntimeState, interval: number | null): number {
+    if (!interval) return 0;
+    return (state.shotsFired + 1) % interval === 0 ? 1 : 0;
+  }
+
+  private updateFocusMultiplier(
+    state: WeaponRuntimeState,
+    weaponId: WeaponId,
+    target: Enemy,
+    damagePerStack: number,
+    maxStacks: number,
+  ): number {
+    if (weaponId !== 'assaultRifle' || maxStacks <= 0) {
+      state.focusTarget = null;
+      state.focusStacks = 0;
+      return 1;
+    }
+
+    if (state.focusTarget === target) {
+      state.focusStacks = Math.min(maxStacks, state.focusStacks + 1);
+    } else {
+      state.focusTarget = target;
+      state.focusStacks = 1;
+    }
+
+    return 1 + state.focusStacks * damagePerStack;
+  }
+
+  private chainTeslaBeam(target: Enemy, damage: number, critChance: number, critMultiplier: number, chainJumps: number, chainFalloff: number): void {
+    if (chainJumps <= 0 || chainFalloff <= 0) return;
+
+    const chained = new Set<Enemy>([target]);
+    let source = target;
+    let chainDamage = damage;
+
+    for (let jump = 0; jump < chainJumps; jump += 1) {
+      const next = this.findChainTarget(source, chained, 170);
+      if (!next) return;
+
+      chained.add(next);
+      chainDamage = Math.max(1, Math.ceil(chainDamage * chainFalloff));
+      this.drawTeslaChain(source, next);
+      this.damageEnemy(next, chainDamage, critChance, critMultiplier);
+      source = next;
+    }
+  }
+
+  private findChainTarget(source: Enemy, exclude: Set<Enemy>, rangePx: number): Enemy | null {
+    return (
+      this.enemies
+        .filter((enemy) => {
+          if (exclude.has(enemy) || !enemy.body.active || enemy.state === 'dying') return false;
+          return Phaser.Math.Distance.Between(source.body.x, source.body.y, enemy.body.x, enemy.body.y) <= rangePx;
+        })
+        .sort(
+          (a, b) =>
+            Phaser.Math.Distance.Between(source.body.x, source.body.y, a.body.x, a.body.y) -
+            Phaser.Math.Distance.Between(source.body.x, source.body.y, b.body.x, b.body.y),
+        )[0] ?? null
+    );
+  }
+
+  private drawTeslaChain(source: Enemy, target: Enemy): void {
+    const beam = this.scene.add.graphics().setDepth(BATTLE_WORLD_DEPTHS.beam);
+    beam.lineStyle(4, 0x78d8ff, 0.7);
+    beam.lineBetween(source.body.x, source.body.y, target.body.x, target.body.y);
+    beam.lineStyle(1, 0xf2ffff, 0.9);
+    beam.lineBetween(source.body.x, source.body.y, target.body.x, target.body.y);
+
+    this.scene.tweens.add({
+      targets: beam,
+      alpha: 0,
+      duration: 120,
+      ease: 'Sine.easeOut',
+      onComplete: () => beam.destroy(),
+    });
   }
 
   private createWeaponRuntimeState(weapon: MountedBattleWeapon, initialCooldownMs = 0): WeaponRuntimeState {
@@ -354,6 +482,9 @@ export class BattleSystem {
       ammo: Math.max(1, stats.magazineSize),
       heat: 0,
       overheatMs: 0,
+      shotsFired: 0,
+      focusTarget: null,
+      focusStacks: 0,
     };
   }
 
@@ -379,6 +510,7 @@ export class BattleSystem {
   }
 
   private consumeAmmo(state: WeaponRuntimeState, magazineSize: number, reloadMs: number, cooldownMs: number): void {
+    state.shotsFired += 1;
     state.ammo -= 1;
     state.shotCooldownMs = cooldownMs;
     if (state.ammo > 0) return;
@@ -387,6 +519,7 @@ export class BattleSystem {
   }
 
   private consumeTeslaHeat(state: WeaponRuntimeState, cooldownMs: number): void {
+    state.shotsFired += 1;
     state.heat = Math.min(1, state.heat + 0.28);
     state.shotCooldownMs = cooldownMs;
     if (state.heat < 1) return;
@@ -423,6 +556,9 @@ export class BattleSystem {
     critMultiplier: number,
     weaponId: BallisticWeaponId,
     maxRangePx: number,
+    pierceRemaining: number,
+    grenadeRadius: number,
+    grenadeSplashDamageMultiplier: number,
   ): void {
     const art = PROJECTILE_ART[weaponId];
     const projectile = this.scene.add.image(x, y, art.textureKey);
@@ -435,6 +571,9 @@ export class BattleSystem {
       damage,
       critChance,
       critMultiplier,
+      pierceRemaining,
+      grenadeRadius,
+      grenadeSplashDamageMultiplier,
       velocityX: Math.cos(angle) * speed,
       velocityY: Math.sin(angle) * speed,
       maxRangePx,
@@ -447,7 +586,16 @@ export class BattleSystem {
     return 0.16;
   }
 
-  private fireTeslaBeam(mountX: number, mountY: number, target: Enemy, damage: number, critChance: number, critMultiplier: number): void {
+  private fireTeslaBeam(
+    mountX: number,
+    mountY: number,
+    target: Enemy,
+    damage: number,
+    critChance: number,
+    critMultiplier: number,
+    chainJumps: number,
+    chainFalloff: number,
+  ): void {
     const startY = mountY;
     const beam = this.scene.add.graphics().setDepth(BATTLE_WORLD_DEPTHS.beam);
     const points = this.createBeamPoints(mountX, startY, target.body.x, target.body.y);
@@ -479,6 +627,7 @@ export class BattleSystem {
     });
 
     this.damageEnemy(target, damage, critChance, critMultiplier);
+    this.chainTeslaBeam(target, damage, critChance, critMultiplier, chainJumps, chainFalloff);
   }
 
   private createBeamPoints(startX: number, startY: number, endX: number, endY: number): Array<{ x: number; y: number }> {
@@ -519,6 +668,7 @@ export class BattleSystem {
       if (enemy.attackCooldownMs <= 0) {
         this.playEnemyAttack(enemy);
         this.bunkerHp = Math.max(0, this.bunkerHp - this.getIncomingBaseDamage(enemy.damage));
+        this.tryEmergencyRepair();
         enemy.attackCooldownMs = enemy.attackDelayMs;
         this.scene.cameras.main.shake(90, 0.004);
       }
@@ -549,7 +699,16 @@ export class BattleSystem {
       if (projectile.traveledPx < projectile.maxRangePx) continue;
 
       if (projectile.weaponId === 'grenadeLauncher') {
-        this.detonateGrenade(projectile.body.x, projectile.body.y, null, projectile.damage, projectile.critChance, projectile.critMultiplier);
+        this.detonateGrenade(
+          projectile.body.x,
+          projectile.body.y,
+          null,
+          projectile.damage,
+          projectile.critChance,
+          projectile.critMultiplier,
+          projectile.grenadeRadius,
+          projectile.grenadeSplashDamageMultiplier,
+        );
       }
       projectile.body.setActive(false).setVisible(false);
     }
@@ -564,49 +723,72 @@ export class BattleSystem {
         const distance = Phaser.Math.Distance.Between(projectile.body.x, projectile.body.y, enemy.body.x, enemy.body.y);
         if (distance > 24) continue;
 
-        projectile.body.setActive(false).setVisible(false);
         if (projectile.weaponId === 'grenadeLauncher') {
-          this.detonateGrenade(projectile.body.x, projectile.body.y, enemy, projectile.damage, projectile.critChance, projectile.critMultiplier);
+          projectile.body.setActive(false).setVisible(false);
+          this.detonateGrenade(
+            projectile.body.x,
+            projectile.body.y,
+            enemy,
+            projectile.damage,
+            projectile.critChance,
+            projectile.critMultiplier,
+            projectile.grenadeRadius,
+            projectile.grenadeSplashDamageMultiplier,
+          );
         } else {
           this.damageEnemy(enemy, projectile.damage, projectile.critChance, projectile.critMultiplier);
+          if (projectile.pierceRemaining <= 0) {
+            projectile.body.setActive(false).setVisible(false);
+          } else {
+            projectile.pierceRemaining -= 1;
+          }
         }
-        break;
+        if (!projectile.body.active) break;
       }
     }
   }
 
-  private detonateGrenade(x: number, y: number, primaryTarget: Enemy | null, damage: number, critChance: number, critMultiplier: number): void {
-    this.spawnGrenadeExplosion(x, y);
+  private detonateGrenade(
+    x: number,
+    y: number,
+    primaryTarget: Enemy | null,
+    damage: number,
+    critChance: number,
+    critMultiplier: number,
+    radius: number,
+    splashDamageMultiplier: number,
+  ): void {
+    this.spawnGrenadeExplosion(x, y, radius);
     playGrenadeExplosionSfx(this.scene);
     if (primaryTarget) {
       this.damageEnemy(primaryTarget, damage, critChance, critMultiplier);
     }
 
-    const splashDamage = Math.max(1, Math.round(damage * GRENADE_EXPLOSION.splashDamageMultiplier));
+    const splashDamage = Math.max(1, Math.round(damage * splashDamageMultiplier));
     for (const enemy of this.enemies) {
       if (enemy === primaryTarget || !enemy.body.active || enemy.state === 'dying') continue;
 
       const distance = Phaser.Math.Distance.Between(x, y, enemy.body.x, enemy.body.y);
-      if (distance > GRENADE_EXPLOSION.radius) continue;
+      if (distance > radius) continue;
       this.damageEnemy(enemy, splashDamage, critChance, critMultiplier);
     }
   }
 
-  private spawnGrenadeExplosion(x: number, y: number): void {
+  private spawnGrenadeExplosion(x: number, y: number, radius: number): void {
     const explosion = this.scene.add.graphics({ x, y }).setDepth(BATTLE_WORLD_DEPTHS.projectiles + 1);
     explosion.fillStyle(0x2a1208, 0.32);
-    explosion.fillCircle(0, 0, GRENADE_EXPLOSION.radius);
+    explosion.fillCircle(0, 0, radius);
     explosion.lineStyle(5, 0xff8a2a, 0.72);
-    explosion.strokeCircle(0, 0, GRENADE_EXPLOSION.radius * 0.62);
+    explosion.strokeCircle(0, 0, radius * 0.62);
     explosion.fillStyle(0xffd36a, 0.9);
-    explosion.fillCircle(0, 0, GRENADE_EXPLOSION.radius * 0.22);
+    explosion.fillCircle(0, 0, radius * 0.22);
     explosion.fillStyle(0xf3ead2, 0.86);
-    explosion.fillCircle(-6, -6, GRENADE_EXPLOSION.radius * 0.09);
+    explosion.fillCircle(-6, -6, radius * 0.09);
 
     for (let index = 0; index < 6; index += 1) {
       const angle = (Math.PI * 2 * index) / 6 + Phaser.Math.FloatBetween(-0.18, 0.18);
-      const inner = GRENADE_EXPLOSION.radius * 0.2;
-      const outer = GRENADE_EXPLOSION.radius * Phaser.Math.FloatBetween(0.42, 0.74);
+      const inner = radius * 0.2;
+      const outer = radius * Phaser.Math.FloatBetween(0.42, 0.74);
       explosion.lineStyle(2, 0xffc46a, 0.72);
       explosion.lineBetween(Math.cos(angle) * inner, Math.sin(angle) * inner, Math.cos(angle) * outer, Math.sin(angle) * outer);
     }
@@ -633,10 +815,13 @@ export class BattleSystem {
 
     if (enemy.hp <= 0) {
       this.kills += 1;
-      this.softEarned += getKillReward(this.config.stage, enemy.enemyId);
       if (enemy.boss) {
+        this.softEarned += getBossReward(this.config.stage);
         this.hardEarned += enemy.boss.tokenReward;
+      } else {
+        this.softEarned += getKillReward(this.config.stage, enemy.enemyId);
       }
+      maybePlayZombieDeathSfx(this.scene, Boolean(enemy.boss));
       this.playEnemyDeath(enemy);
     }
   }
@@ -812,7 +997,23 @@ export class BattleSystem {
   }
 
   private getIncomingBaseDamage(rawDamage: number): number {
-    return Math.max(1, rawDamage - this.config.bunkerArmor);
+    return getMitigatedBaseDamage(rawDamage, this.config.bunkerArmor, this.config.stage);
+  }
+
+  private tryEmergencyRepair(): void {
+    if (!this.emergencyRepairAvailable || this.config.emergencyRepairLevel <= 0 || this.bunkerHp <= 0) return;
+
+    const threshold = getEmergencyRepairThreshold(this.config.bunkerHp);
+    if (this.bunkerHp > threshold) return;
+
+    this.bunkerHp = Phaser.Math.Clamp(
+      this.bunkerHp + getEmergencyRepairHeal(this.config.bunkerHp, this.config.emergencyRepairLevel),
+      1,
+      this.config.bunkerHp,
+    );
+    this.emergencyRepairAvailable = false;
+
+    this.scene.cameras.main.flash(110, 143, 191, 99, false);
   }
 
   private playEnemyDeath(enemy: Enemy): void {

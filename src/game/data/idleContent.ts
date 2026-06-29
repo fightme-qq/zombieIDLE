@@ -5,7 +5,7 @@ export const IDLE_GRID_CONFIG = {
   startRows: 2,
   maxCols: 15,
   maxRows: 15,
-  baseCellCost: 25,
+  baseCellCost: 110,
   cellCostScale: 1.12,
 } as const;
 
@@ -14,12 +14,12 @@ export const IDLE_STAGE_CONFIG = {
 } as const;
 
 export const IDLE_WAVE_CONFIG = {
-  maxActiveEnemies: 32,
+  maxActiveEnemies: 28,
   maxTotalEnemies: 110,
 } as const;
 
 export const IDLE_REWARD_CONFIG = {
-  baseKillReward: 3,
+  baseKillReward: 4,
   stageRewardScale: 1.08,
   bossRewardMultiplier: 12,
   enemyTierMultipliers: {

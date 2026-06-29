@@ -6,6 +6,7 @@ import { ROAD_BOUNDS } from '../config/roadBounds';
 import { SceneKeys } from '../config/sceneKeys';
 import { getBossForStage } from '../data/bossData';
 import { getStageWave } from '../data/stageWaveData';
+import { saveRunProgress } from '../save/RunProgress';
 import { sharedRunState } from '../state/sharedRunState';
 import { BATTLE_WORLD_DEPTHS, BattleSystem, type BattleSnapshot } from '../systems/BattleSystem';
 import { createCurrencyValue, type CurrencyKind, type CurrencyValueView } from '../ui/currencyUi';
@@ -62,7 +63,7 @@ export class BattleScene extends Phaser.Scene {
   update(_time: number, delta: number): void {
     if (!this.battle) return;
 
-    this.battle.setBaseDefense(sharedRunState.maxBunkerHp, sharedRunState.baseArmor);
+    this.battle.setBaseDefense(sharedRunState.maxBunkerHp, sharedRunState.baseArmor, sharedRunState.emergencyRepairLevel);
     this.syncWeaponsFromState();
     const snapshot = this.battle.update(delta);
     this.registry.set(BATTLE_SNAPSHOT_REGISTRY_KEY, snapshot);
@@ -91,6 +92,7 @@ export class BattleScene extends Phaser.Scene {
     this.battle = new BattleSystem(this, {
       bunkerHp: sharedRunState.maxBunkerHp,
       bunkerArmor: sharedRunState.baseArmor,
+      emergencyRepairLevel: sharedRunState.emergencyRepairLevel,
       stage: sharedRunState.currentStage,
       wave: getStageWave(sharedRunState.currentStage),
       boss: getBossForStage(sharedRunState.currentStage),
@@ -107,6 +109,7 @@ export class BattleScene extends Phaser.Scene {
 
     if (snapshot.result === 'won') {
       const nextStage = sharedRunState.advanceStage();
+      saveRunProgress(sharedRunState);
       this.battleSoftCollected = 0;
       this.battleHardCollected = 0;
       this.battle?.startStage(nextStage, getStageWave(nextStage), getBossForStage(nextStage));
@@ -116,6 +119,7 @@ export class BattleScene extends Phaser.Scene {
     this.battle?.destroy();
     this.battle = null;
     sharedRunState.resetToCheckpoint();
+    saveRunProgress(sharedRunState);
     this.startBattle();
   }
 
@@ -151,6 +155,7 @@ export class BattleScene extends Phaser.Scene {
 
     sharedRunState.soft += snapshot.softEarned - this.battleSoftCollected;
     this.battleSoftCollected = snapshot.softEarned;
+    saveRunProgress(sharedRunState);
   }
 
   private collectBattleHard(snapshot: BattleSnapshot): void {
@@ -158,6 +163,7 @@ export class BattleScene extends Phaser.Scene {
 
     sharedRunState.hard += snapshot.hardEarned - this.battleHardCollected;
     this.battleHardCollected = snapshot.hardEarned;
+    saveRunProgress(sharedRunState);
   }
 
   private syncWeaponsFromState(): void {

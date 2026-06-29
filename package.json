@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "agent:audit": "node scripts/agent-audit.mjs",
+    "balance:sim": "node scripts/balance-sim.mjs",
     "dev": "vite --host 0.0.0.0",
     "build": "tsc && vite build",
     "test": "vitest run tests/unit",

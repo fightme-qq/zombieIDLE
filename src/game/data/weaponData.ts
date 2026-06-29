@@ -53,11 +53,11 @@ export const WEAPON_CATEGORIES: Array<{ id: WeaponCategoryId; label: string }> =
 ];
 
 const COMMON_UPGRADES = {
-  damage: { id: 'damage', label: 'Damage', baseCost: 35, costScale: 1.45, maxLevel: 10 },
-  fireRate: { id: 'fireRate', label: 'Fire Rate', baseCost: 55, costScale: 1.5, maxLevel: 8 },
-  handling: { id: 'handling', label: 'Handling', baseCost: 40, costScale: 1.42, maxLevel: 8 },
-  range: { id: 'range', label: 'Range', baseCost: 45, costScale: 1.48, maxLevel: 8 },
-  critChance: { id: 'critChance', label: 'Crit Chance', baseCost: 65, costScale: 1.5, maxLevel: 10 },
+  damage: { id: 'damage', label: 'Damage', baseCost: 95, costScale: 1.45, maxLevel: 10 },
+  fireRate: { id: 'fireRate', label: 'Fire Rate', baseCost: 135, costScale: 1.5, maxLevel: 8 },
+  handling: { id: 'handling', label: 'Handling', baseCost: 110, costScale: 1.42, maxLevel: 8 },
+  range: { id: 'range', label: 'Range', baseCost: 120, costScale: 1.48, maxLevel: 8 },
+  critChance: { id: 'critChance', label: 'Crit Chance', baseCost: 160, costScale: 1.5, maxLevel: 10 },
 } as const satisfies Record<'damage' | 'fireRate' | 'handling' | 'range' | 'critChance', WeaponUpgradeStatDefinition>;
 
 function upgradeSet(specialLabel: string, specialBaseCost: number): readonly WeaponUpgradeStatDefinition[] {
@@ -113,9 +113,9 @@ export const WEAPONS: Record<WeaponId, WeaponDefinition> = {
     rangePx: 220,
     maxRangePx: 430,
     spread: 1,
-    softCost: 40,
+    softCost: 110,
     unlockCost: { currency: 'soft', amount: 50 },
-    upgradeStats: upgradeSet('Double Tap', 95),
+    upgradeStats: upgradeSet('Double Tap', 220),
     description: 'Быстро стреляет по одной цели.',
   },
   shotgun: {
@@ -136,9 +136,9 @@ export const WEAPONS: Record<WeaponId, WeaponDefinition> = {
     rangePx: 220,
     maxRangePx: 430,
     spread: 3,
-    softCost: 75,
-    unlockCost: { currency: 'soft', amount: 120 },
-    upgradeStats: upgradeSet('Extra Pellets', 140),
+    softCost: 160,
+    unlockCost: { currency: 'soft', amount: 180 },
+    upgradeStats: upgradeSet('Extra Pellets', 300),
     description: 'Дает веер из трех выстрелов.',
   },
   tesla: {
@@ -160,9 +160,9 @@ export const WEAPONS: Record<WeaponId, WeaponDefinition> = {
     rangePx: 360,
     maxRangePx: 650,
     spread: 1,
-    softCost: 120,
-    unlockCost: { currency: 'hard', amount: 8 },
-    upgradeStats: upgradeSet('Chain Arc', 240),
+    softCost: 260,
+    unlockCost: { currency: 'hard', amount: 12 },
+    upgradeStats: upgradeSet('Chain Arc', 420),
     description: 'Медленнее, но больно бьет.',
   },
   assaultRifle: {
@@ -184,9 +184,9 @@ export const WEAPONS: Record<WeaponId, WeaponDefinition> = {
     rangePx: 290,
     maxRangePx: 720,
     spread: 1,
-    softCost: 110,
-    unlockCost: { currency: 'soft', amount: 260 },
-    upgradeStats: upgradeSet('Focus Fire', 170),
+    softCost: 240,
+    unlockCost: { currency: 'soft', amount: 420 },
+    upgradeStats: upgradeSet('Focus Fire', 360),
     description: 'Частая стрельба средним уроном.',
   },
   compactShotgun: {
@@ -208,9 +208,9 @@ export const WEAPONS: Record<WeaponId, WeaponDefinition> = {
     rangePx: 220,
     maxRangePx: 430,
     spread: 5,
-    softCost: 95,
-    unlockCost: { currency: 'soft', amount: 180 },
-    upgradeStats: upgradeSet('Wide Burst', 150),
+    softCost: 210,
+    unlockCost: { currency: 'soft', amount: 310 },
+    upgradeStats: upgradeSet('Wide Burst', 330),
     description: 'Короткий широкий веер.',
   },
   sniperRifle: {
@@ -232,9 +232,9 @@ export const WEAPONS: Record<WeaponId, WeaponDefinition> = {
     rangePx: 430,
     maxRangePx: 720,
     spread: 1,
-    softCost: 160,
-    unlockCost: { currency: 'hard', amount: 12 },
-    upgradeStats: upgradeSet('Critical Shot', 300),
+    softCost: 330,
+    unlockCost: { currency: 'hard', amount: 18 },
+    upgradeStats: upgradeSet('Critical Shot', 520),
     description: 'Редкий мощный дальний выстрел.',
   },
   grenadeLauncher: {
@@ -257,9 +257,9 @@ export const WEAPONS: Record<WeaponId, WeaponDefinition> = {
     rangePx: 220,
     maxRangePx: 430,
     spread: 1,
-    softCost: 180,
-    unlockCost: { currency: 'hard', amount: 16 },
-    upgradeStats: upgradeSet('Blast Radius', 360),
+    softCost: 360,
+    unlockCost: { currency: 'hard', amount: 24 },
+    upgradeStats: upgradeSet('Blast Radius', 620),
     description: 'Тяжелый залп по плотной группе.',
   },
 };
@@ -267,7 +267,7 @@ export const WEAPONS: Record<WeaponId, WeaponDefinition> = {
 export const WEAPON_POOL: WeaponId[] = ['pistol', 'shotgun', 'tesla', 'assaultRifle', 'compactShotgun', 'sniperRifle', 'grenadeLauncher'];
 export const OFFER_SLOT_COUNT = 3;
 export const OFFERED_WEAPONS: WeaponId[] = WEAPON_POOL.slice(0, OFFER_SLOT_COUNT);
-export const REROLL_SET_COST = 25;
+export const REROLL_SET_COST = 90;
 
 export const WEAPON_UPGRADE_CONFIG = {
   baseCost: 35,
