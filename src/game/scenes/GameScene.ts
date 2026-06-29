@@ -2651,18 +2651,13 @@ export class GameScene extends Phaser.Scene {
     this.syncTutorialAutoCompletion();
     if (this.settingsOpen || this.cheatsOpen || this.dragState || this.pendingDrag) return null;
 
-    for (const step of TUTORIAL_STEPS) {
-      if (this.tutorialCompleted.has(step)) continue;
-      const target =
-        step === 'buy-weapon'
-          ? this.getBuyWeaponTutorialTarget()
-          : step === 'upgrade-weapon'
-            ? this.getUpgradeWeaponTutorialTarget()
-            : this.getBuyCellTutorialTarget();
-      if (target) return target;
-    }
-
-    return null;
+    const step = TUTORIAL_STEPS.find((candidate) => !this.tutorialCompleted.has(candidate));
+    if (!step) return null;
+    return step === 'buy-weapon'
+      ? this.getBuyWeaponTutorialTarget()
+      : step === 'upgrade-weapon'
+        ? this.getUpgradeWeaponTutorialTarget()
+        : this.getBuyCellTutorialTarget();
   }
 
   private getBuyWeaponTutorialTarget(): TutorialTarget | null {

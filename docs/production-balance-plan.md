@@ -52,11 +52,11 @@ These are design targets for the first tuning pass.
 
 | Item | Current | Draft Direction |
 | --- | ---: | --- |
-| Starting soft | 80 | implemented target range 80-120 |
+| Starting soft | 200 | implemented target range 200-220 |
 | Starting hard | 0 | implemented |
 | Stage 1 total reward | ~32 soft | implemented target range 30-45 |
 | First cell cost | 110 | implemented as early capacity sink |
-| First weapon purchase | 110 soft | affordable after surviving the first wave |
+| First weapon purchase | 105 soft | affordable immediately for tutorial step 1, leaving 95 soft for the first upgrade |
 | First soft weapon unlock | 180-420 soft | affordable around 3-5 minutes for first new weapon |
 | First hard weapon unlock | 12 hard | only after the second boss path |
 | First boss reward | 348 soft + 6 hard | enough to create desire, not instant premium |
@@ -355,14 +355,14 @@ Status: implemented.
 
 Changes:
 
-- lowered starting `soft` from `1000` to `80`;
+- lowered starting `soft` from `1000` to `200`;
 - set starting `hard` from `25` to `0`;
 - retuned first weapon, first cell, reroll, base, and first upgrade prices;
 - keep starter weapon free and already placed.
 
 Validation:
 
-- simulator shows first spend in 45-90 seconds;
+- simulator shows first spend is available immediately for tutorial onboarding;
 - first extra weapon in 2-3 minutes;
 - no hard weapon unlock before boss rewards.
 
@@ -378,7 +378,7 @@ Changes:
 - restored all regular enemy archetypes to regular waves instead of removing boss source enemies;
 - reduced active enemy cap to `28` for mobile-safe production density;
 - added a stage 1 onboarding density cap and slower first-wave spawn interval so zombies do not arrive as one early pack;
-- lowered the repeat pistol purchase to `110 soft`, letting a clean first wave create the first visible weapon purchase;
+- lowered the repeat pistol purchase to `105 soft`, letting a new player buy it and still afford the first upgrade tutorial;
 - changed Gatebreaker to an armored-style slow HP wall with about `1716 HP` at stage 10;
 - slowed boss movement into the target direction.
 

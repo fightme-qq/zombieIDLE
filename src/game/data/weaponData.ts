@@ -113,7 +113,7 @@ export const WEAPONS: Record<WeaponId, WeaponDefinition> = {
     rangePx: 220,
     maxRangePx: 430,
     spread: 1,
-    softCost: 110,
+    softCost: 105,
     unlockCost: { currency: 'soft', amount: 50 },
     upgradeStats: upgradeSet('Double Tap', 220),
     description: 'Быстро стреляет по одной цели.',

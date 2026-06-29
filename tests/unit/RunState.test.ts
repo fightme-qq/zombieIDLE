@@ -34,10 +34,10 @@ describe('RunState weapon rotation', () => {
 
   it('spends soft only when a bought weapon can be placed', () => {
     const state = new RunState({ includeStarterPistol: false });
-    state.soft = 110;
+    state.soft = 105;
 
     expect(state.buyAndPlaceWeapon('pistol', 5, 0, 0)).toBe(false);
-    expect(state.soft).toBe(110);
+    expect(state.soft).toBe(105);
     expect(state.placedWeapons).toEqual([]);
 
     expect(state.isWeaponUnlocked('pistol')).toBe(true);
@@ -48,11 +48,11 @@ describe('RunState weapon rotation', () => {
 
   it('blocks weapon purchases when soft is too low', () => {
     const state = new RunState({ includeStarterPistol: false });
-    state.soft = 109;
+    state.soft = 104;
 
     expect(state.canAffordWeapon('pistol')).toBe(false);
     expect(state.buyAndPlaceWeapon('pistol', 0, 0, 0)).toBe(false);
-    expect(state.soft).toBe(109);
+    expect(state.soft).toBe(104);
   });
 
   it('unlocks early weapons with soft currency', () => {

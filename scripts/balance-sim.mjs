@@ -171,7 +171,7 @@ const WEAPONS = {
     rangePx: 220,
     maxRangePx: 430,
     spread: 1,
-    softCost: 110,
+    softCost: 105,
     unlockCost: '50 soft',
     special: { label: 'Double Tap', baseCost: 220 },
   },
@@ -262,7 +262,7 @@ const WEAPONS = {
 };
 
 const STARTING_WALLET = {
-  soft: 80,
+  soft: 200,
   hard: 0,
 };
 
@@ -279,7 +279,7 @@ const BASE_DEFENSE = {
 };
 
 const TARGETS = {
-  startingSoftMax: 120,
+  startingSoftMax: 220,
   startingHard: 0,
   mobileActiveEnemyCap: 28,
   firstPremiumUnlockBossStage: 20,
@@ -331,7 +331,7 @@ function printWalletSummary() {
     {
       soft: STARTING_WALLET.soft,
       hard: STARTING_WALLET.hard,
-      targetSoft: '80-120',
+      targetSoft: '200-220',
       targetHard: TARGETS.startingHard,
     },
   ]);
@@ -466,7 +466,7 @@ function printWarnings() {
   const stage1Reward = getWaveSoftReward(getStageWave(1));
 
   if (STARTING_WALLET.soft > TARGETS.startingSoftMax) {
-    warnings.push(`Starting soft ${STARTING_WALLET.soft} is far above production target 80-120.`);
+    warnings.push(`Starting soft ${STARTING_WALLET.soft} is far above production target 200-220.`);
   }
 
   if (STARTING_WALLET.hard !== TARGETS.startingHard) {

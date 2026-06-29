@@ -51,7 +51,7 @@ const EMERGENCY_REPAIR_MAX_LEVEL = 5;
 const RARE_CHANCE_COST = 140;
 
 export class RunState {
-  soft = 80;
+  soft = 200;
   hard = 0;
   zombieKills = 0;
   bossKills = 0;
